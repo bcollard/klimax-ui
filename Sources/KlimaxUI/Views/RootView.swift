@@ -1,0 +1,41 @@
+import SwiftUI
+
+struct RootView: View {
+    @State private var model = AppModel()
+    @State private var columnVisibility: NavigationSplitViewVisibility = .all
+
+    var body: some View {
+        NavigationSplitView(columnVisibility: $columnVisibility) {
+            SidebarView(model: model)
+                .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
+        } detail: {
+            detailView
+        }
+        .task {
+            await model.bootstrap()
+        }
+        .onChange(of: model.selection) { _, _ in
+            Task { await model.refreshSelection() }
+        }
+    }
+
+    @ViewBuilder
+    private var detailView: some View {
+        switch model.selection {
+        case .cluster(let name):
+            if let cluster = model.clusters.first(where: { $0.name == name }) {
+                ClusterDetailView(model: model, cluster: cluster)
+            } else {
+                OverviewDetailView(model: model)
+            }
+        case .mirror(let name):
+            if let mirror = model.mirrors.first(where: { $0.name == name }) {
+                MirrorDetailView(model: model, mirror: mirror)
+            } else {
+                OverviewDetailView(model: model)
+            }
+        case .none:
+            OverviewDetailView(model: model)
+        }
+    }
+}

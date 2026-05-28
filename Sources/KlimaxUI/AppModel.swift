@@ -1,0 +1,426 @@
+import Foundation
+import Observation
+
+@MainActor
+@Observable
+final class AppModel {
+    // The single klimax VM. Klimax is designed around exactly one instance at a time.
+    var vm: Instance?
+    var config: KlimaxConfig?
+    var klimaxVersion: String?
+
+    // VM live state (probed over SSH when running).
+    var guestStats: GuestSSH.GuestStats?
+    var guestLima0IP: String?
+
+    var clusters: [KindCluster] = []
+    var clustersLoading = false
+    var clustersError: String?
+
+    var selection: SidebarSelection?
+
+    // Per-selected-cluster details (rebuilt on selection change).
+    var clusterDetail: ClusterDetail?
+
+    // Time-series metrics per cluster (persists across selection changes).
+    var metricsHistory: [String: MetricsHistory] = [:]
+    var latestPods: [String: [PodMetric]] = [:]
+    var metricsError: [String: String] = [:]
+    private var metricsTask: Task<Void, Never>?
+    private static let pollInterval: Duration = .seconds(15)
+
+    // TCP probe results: cluster.name -> "ip:port" -> result.
+    var serviceProbes: [String: [String: ProbeResult]] = [:]
+    private var probeTask: Task<Void, Never>?
+
+    struct ProbeResult: Sendable, Hashable {
+        let timestamp: Date
+        let isOpen: Bool
+    }
+
+    // VM CPU/memory history (host-VM-level, polled while VM is running).
+    var vmHistory = VMHistory()
+    private var vmPollTask: Task<Void, Never>?
+    private var lastVMRaw: GuestRawSample?
+    private static let vmPollInterval: Duration = .seconds(5)
+
+    // Registry mirror disk-usage measurements, keyed by mirror name.
+    var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
+
+    enum MirrorCacheSize: Sendable, Hashable {
+        case measuring
+        case measured(bytes: Int64, tags: Int?, repos: Int?, path: String)
+        case missing(path: String)
+        case storedInGuest
+    }
+
+    var inFlightAction: String?
+    var actionLog: String = ""
+
+    struct ClusterDetail: Sendable {
+        var cluster: KindCluster
+        var nodes: [KubeNode] = []
+        var pods: [KubePod] = []
+        var services: [KubeService] = []
+        var metricsServerReady: Bool = false
+        var serverVersion: String? = nil
+        var loading: Bool = true
+        var error: String? = nil
+    }
+
+    var selectedCluster: KindCluster? {
+        if case .cluster(let name) = selection {
+            return clusters.first { $0.name == name }
+        }
+        return nil
+    }
+
+    var selectedMirror: KlimaxConfig.Registries.Mirror? {
+        if case .mirror(let name) = selection {
+            return config?.registries?.mirrors?.first { $0.name == name }
+        }
+        return nil
+    }
+
+    var mirrors: [KlimaxConfig.Registries.Mirror] {
+        config?.registries?.mirrors ?? []
+    }
+
+    // MARK: - Bootstrap
+
+    func bootstrap() async {
+        await refreshAll()
+        if klimaxVersion == nil {
+            klimaxVersion = (try? await KlimaxCLI.version()) ?? "klimax (unknown)"
+        }
+        startVMPollingIfRunning()
+    }
+
+    private func startVMPollingIfRunning() {
+        vmPollTask?.cancel()
+        vmPollTask = nil
+        guard let vm, vm.isRunning, let ssh = vm.ssh else { return }
+        let guest = GuestSSH(endpoint: ssh)
+        vmPollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.collectVMSample(guest: guest)
+                try? await Task.sleep(for: AppModel.vmPollInterval)
+            }
+        }
+    }
+
+    private func collectVMSample(guest: GuestSSH) async {
+        guard let raw = await guest.rawSample() else { return }
+        guard !Task.isCancelled else { return }
+        let prev = lastVMRaw
+        lastVMRaw = raw
+
+        var cpuPercent: Double?
+        if let prev {
+            let totalDelta = Int64(raw.cpuTotalTicks) - Int64(prev.cpuTotalTicks)
+            let idleDelta = Int64(raw.cpuIdleTicks) - Int64(prev.cpuIdleTicks)
+            if totalDelta > 0 {
+                let busy = Double(totalDelta - idleDelta) / Double(totalDelta)
+                cpuPercent = max(0, min(100, busy * 100))
+            }
+        }
+
+        let totalMiB = Double(raw.memTotalKB) / 1024.0
+        let usedMiB = Double(raw.memTotalKB - raw.memAvailableKB) / 1024.0
+        vmHistory.append(VMSample(
+            id: UUID(),
+            timestamp: raw.timestamp,
+            cpuPercent: cpuPercent,
+            memUsedMiB: usedMiB,
+            memTotalMiB: totalMiB
+        ))
+    }
+
+    /// Reload VM, config, clusters, guest probes; refresh selected-cluster detail if any.
+    func refreshAll() async {
+        config = InstanceDiscovery.loadConfig()
+        vm = resolveSingleInstance()
+        await refreshClusters()
+        if let vm, vm.isRunning, let ssh = vm.ssh {
+            let guest = GuestSSH(endpoint: ssh)
+            async let ipTask = guest.lima0IP()
+            async let statsTask = guest.stats()
+            guestLima0IP = await ipTask
+            guestStats = await statsTask
+        } else {
+            guestLima0IP = nil
+            guestStats = nil
+        }
+        // Drop stale selection.
+        if case .cluster(let name) = selection, !clusters.contains(where: { $0.name == name }) {
+            selection = nil
+        }
+        if case .mirror(let name) = selection, !mirrors.contains(where: { $0.name == name }) {
+            selection = nil
+        }
+        await refreshSelection()
+    }
+
+    private func resolveSingleInstance() -> Instance? {
+        let all = InstanceDiscovery.discoverInstances()
+        if let declared = config?.vm.name,
+           let match = all.first(where: { $0.name == declared }) {
+            return match
+        }
+        return all.first
+    }
+
+    func refreshClusters() async {
+        guard vm?.isRunning == true else {
+            clusters = []
+            clustersError = nil
+            return
+        }
+        clustersLoading = true
+        defer { clustersLoading = false }
+        do {
+            clusters = try await KlimaxCLI.listClusters()
+            clustersError = nil
+        } catch {
+            clusters = []
+            clustersError = error.localizedDescription
+        }
+    }
+
+    // MARK: - Selection
+
+    func refreshSelection() async {
+        // Cancel any in-flight metrics polling before changing selection state.
+        metricsTask?.cancel()
+        metricsTask = nil
+
+        switch selection {
+        case .cluster(let name):
+            guard let cluster = clusters.first(where: { $0.name == name }) else {
+                clusterDetail = nil
+                return
+            }
+            await loadClusterDetail(for: cluster)
+            startMetricsPollingIfReady(for: cluster)
+        case .mirror, .none:
+            clusterDetail = nil
+        }
+    }
+
+    private func startMetricsPollingIfReady(for cluster: KindCluster) {
+        guard clusterDetail?.cluster.name == cluster.name,
+              clusterDetail?.metricsServerReady == true
+        else { return }
+        let client = MetricsClient(kubeconfigPath: cluster.kubeconfigPath)
+        let name = cluster.name
+        metricsTask?.cancel()
+        metricsTask = Task { [weak self] in
+            while !Task.isCancelled {
+                await self?.pollMetrics(client: client, clusterName: name)
+                try? await Task.sleep(for: AppModel.pollInterval)
+            }
+        }
+    }
+
+    private func pollMetrics(client: MetricsClient, clusterName: String) async {
+        do {
+            async let nodesTask = client.fetchNodes()
+            async let podsTask = client.fetchPods()
+            let nodes = try await nodesTask
+            let pods = try await podsTask
+            guard !Task.isCancelled else { return }
+            let now = Date()
+            let sample = ClusterMetricSample(
+                timestamp: now,
+                totalCPUMillicores: nodes.reduce(0) { $0 + $1.cpuMillicores },
+                totalMemoryMiB: nodes.reduce(0) { $0 + $1.memoryMiB },
+                perNode: nodes
+            )
+            var history = metricsHistory[clusterName] ?? MetricsHistory()
+            history.append(sample)
+            metricsHistory[clusterName] = history
+            latestPods[clusterName] = pods
+            metricsError[clusterName] = nil
+        } catch {
+            metricsError[clusterName] = error.localizedDescription
+        }
+    }
+
+    /// Compute (and cache) disk usage for a mirror's image cache directory.
+    /// The cache lives on the host by default (~/.klimax/registry-cache/<name>);
+    /// when configured to live in the guest we surface that state without measuring.
+    func measureMirrorCache(_ mirror: KlimaxConfig.Registries.Mirror) async {
+        let storage = config?.registries?.cacheStorage ?? "host"
+        if storage == "guest" {
+            mirrorCacheSizes[mirror.name] = .storedInGuest
+            return
+        }
+        let home = FileManager.default.homeDirectoryForCurrentUser
+        let path = home
+            .appendingPathComponent(".klimax")
+            .appendingPathComponent("registry-cache")
+            .appendingPathComponent(mirror.name)
+            .path
+        mirrorCacheSizes[mirror.name] = .measuring
+        async let sizeTask = DirectorySize.measure(path: path)
+        async let countsTask = RegistryCacheInspector.count(path: path)
+        let bytes = await sizeTask
+        let counts = await countsTask
+        if let bytes {
+            mirrorCacheSizes[mirror.name] = .measured(
+                bytes: bytes,
+                tags: counts?.tags,
+                repos: counts?.repos,
+                path: path
+            )
+        } else {
+            mirrorCacheSizes[mirror.name] = .missing(path: path)
+        }
+    }
+
+    /// Probe TCP reachability for every (LB IP, TCP port) on the cluster's
+    /// LoadBalancer services. Runs in the background; cancels any previous batch.
+    func probeLoadBalancers(for cluster: KindCluster) {
+        guard let detail = clusterDetail, detail.cluster.name == cluster.name else { return }
+        let lbs = detail.services.filter(\.isLoadBalancer)
+        var targets: [(ip: String, port: Int)] = []
+        for svc in lbs {
+            let ips = svc.externalIPs
+            let ports = (svc.spec.ports ?? []).filter { $0.protocolValue.uppercased() == "TCP" }
+            for ip in ips {
+                for port in ports {
+                    targets.append((ip, port.port))
+                }
+            }
+        }
+        guard !targets.isEmpty else {
+            serviceProbes[cluster.name] = [:]
+            return
+        }
+
+        probeTask?.cancel()
+        let name = cluster.name
+        probeTask = Task { [weak self] in
+            let results = await withTaskGroup(of: (String, ProbeResult).self) { group -> [String: ProbeResult] in
+                for target in targets {
+                    group.addTask {
+                        let ok = await TCPProbe.probe(host: target.ip, port: target.port)
+                        return ("\(target.ip):\(target.port)",
+                                ProbeResult(timestamp: Date(), isOpen: ok))
+                    }
+                }
+                var bucket: [String: ProbeResult] = [:]
+                for await pair in group {
+                    bucket[pair.0] = pair.1
+                }
+                return bucket
+            }
+            guard !Task.isCancelled else { return }
+            self?.serviceProbes[name] = results
+        }
+    }
+
+    /// Called externally when the user toggles metrics-server install/uninstall.
+    /// Restart or stop polling based on current readiness.
+    func refreshMetricsPolling() {
+        if case .cluster(let name) = selection,
+           let cluster = clusters.first(where: { $0.name == name }) {
+            startMetricsPollingIfReady(for: cluster)
+        } else {
+            metricsTask?.cancel()
+            metricsTask = nil
+        }
+    }
+
+    func loadClusterDetail(for cluster: KindCluster) async {
+        clusterDetail = ClusterDetail(cluster: cluster, loading: true)
+        let kube = KubeClient(kubeconfigPath: cluster.kubeconfigPath)
+        do {
+            async let nodesTask = kube.listNodes()
+            async let podsTask = kube.listPods()
+            async let servicesTask = kube.listServices()
+            async let metricsTask = kube.metricsServerReady()
+            async let versionTask = kube.clusterVersion()
+            let nodes = try await nodesTask
+            let pods = try await podsTask
+            let services = try await servicesTask
+            let metricsReady = await metricsTask
+            let version = await versionTask
+            clusterDetail = ClusterDetail(
+                cluster: cluster,
+                nodes: nodes,
+                pods: pods,
+                services: services,
+                metricsServerReady: metricsReady,
+                serverVersion: version,
+                loading: false,
+                error: nil
+            )
+            probeLoadBalancers(for: cluster)
+        } catch {
+            clusterDetail = ClusterDetail(
+                cluster: cluster,
+                loading: false,
+                error: error.localizedDescription
+            )
+        }
+    }
+
+    // MARK: - Actions
+
+    func startVM() async {
+        await runAction("Starting VM") { try await KlimaxCLI.up() }
+    }
+
+    func stopVM() async {
+        await runAction("Stopping VM") { try await KlimaxCLI.down() }
+    }
+
+    func createCluster(named name: String) async {
+        await runAction("Creating cluster \(name)") {
+            try await KlimaxCLI.createCluster(name: name)
+        }
+    }
+
+    func deleteCluster(named name: String) async {
+        await runAction("Deleting cluster \(name)") {
+            try await KlimaxCLI.deleteCluster(name: name)
+        }
+        if case .cluster(let sel) = selection, sel == name {
+            selection = nil
+        }
+    }
+
+    func installMetricsServer(for cluster: KindCluster) async {
+        await runAction("Installing metrics-server on \(cluster.name)") {
+            try await Helm(kubeconfigPath: cluster.kubeconfigPath).installMetricsServer()
+        }
+    }
+
+    func uninstallMetricsServer(for cluster: KindCluster) async {
+        await runAction("Uninstalling metrics-server on \(cluster.name)") {
+            try await Helm(kubeconfigPath: cluster.kubeconfigPath).uninstallMetricsServer()
+        }
+    }
+
+    private func runAction(_ label: String, _ work: () async throws -> ProcessResult) async {
+        inFlightAction = label
+        actionLog = ""
+        defer { inFlightAction = nil }
+        do {
+            let result = try await work()
+            actionLog = combinedLog(label: label, result: result)
+        } catch {
+            actionLog = "\(label) failed: \(error.localizedDescription)"
+        }
+        await refreshAll()
+        startVMPollingIfRunning()
+    }
+
+    private func combinedLog(label: String, result: ProcessResult) -> String {
+        var out = "\(label) — exit \(result.exitCode)\n"
+        if !result.stdout.isEmpty { out += "── stdout ──\n\(result.stdout)\n" }
+        if !result.stderr.isEmpty { out += "── stderr ──\n\(result.stderr)\n" }
+        return out
+    }
+}

@@ -63,3 +63,4 @@ spctl -a -t open --context context:primary-signature -vv "$DMG"
 
 step "Done"
 ls -lh "$ZIP" "$DMG"
+shasum -a 256 "$ZIP" "$DMG"

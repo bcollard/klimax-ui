@@ -1,0 +1,15 @@
+format_version = 3
+
+[apps.KlimaxUI]
+identifier = "dev.bcollard.KlimaxUI"
+product = "KlimaxUI"
+version = "0.1.0"
+category = "public.app-category.developer-tools"
+icon = "Sources/KlimaxUI/Resources/klimax-logo.png"
+
+[apps.KlimaxUI.plist]
+CFBundleDisplayName = "Klimax"
+CFBundleName = "Klimax"
+NSHumanReadableCopyright = "Copyright © 2026 Baptiste Collard. All rights reserved."
+LSMinimumSystemVersion = "14.0"
+NSHighResolutionCapable = true

@@ -64,3 +64,29 @@ spctl -a -t open --context context:primary-signature -vv "$DMG"
 step "Done"
 ls -lh "$ZIP" "$DMG"
 shasum -a 256 "$ZIP" "$DMG"
+
+VERSION="$(awk -F'"' '/^version[[:space:]]*=/ { print $2; exit }' Bundler.toml)"
+DMG_SHA="$(shasum -a 256 "$DMG" | awk '{print $1}')"
+
+cat <<EOF
+
+──────────── cask block (paste into bcollard/homebrew-klimax/Casks/klimax-ui.rb) ────────────
+cask "klimax-ui" do
+  version "${VERSION}"
+  sha256 "${DMG_SHA}"
+
+  url "https://github.com/bcollard/klimax-ui/releases/download/v#{version}/KlimaxUI.dmg"
+  name "Klimax"
+  desc "macOS companion app for the klimax CLI and the kind clusters it manages"
+  homepage "https://github.com/bcollard/klimax-ui"
+
+  depends_on macos: ">= :sonoma"
+
+  app "KlimaxUI.app"
+
+  zap trash: [
+    "~/Library/Preferences/dev.bcollard.KlimaxUI.plist",
+  ]
+end
+─────────────────────────────────────────────────────────────────────────────────────────────
+EOF

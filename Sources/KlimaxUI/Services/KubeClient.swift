@@ -52,6 +52,22 @@ struct KubeClient: Sendable {
         return dep.isReady
     }
 
+    /// Creation timestamp of the kube-system namespace — a reliable proxy for
+    /// when the cluster itself was bootstrapped, since kind creates it as part
+    /// of cluster setup. Returns nil when the cluster isn't reachable.
+    func kubeSystemCreationTime() async -> Date? {
+        let args = baseArgs([
+            "get", "ns", "kube-system",
+            "-o", "jsonpath={.metadata.creationTimestamp}",
+        ])
+        guard let result = try? await ProcessRunner.run("kubectl", args), result.ok else {
+            return nil
+        }
+        let raw = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !raw.isEmpty else { return nil }
+        return ISO8601DateFormatter().date(from: raw)
+    }
+
     func clusterVersion() async -> String? {
         let args = baseArgs(["version", "-o", "json"])
         guard let result = try? await ProcessRunner.run("kubectl", args), result.ok else {

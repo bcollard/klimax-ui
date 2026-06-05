@@ -95,14 +95,19 @@ struct ClusterDetailView: View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 4) {
                 Text(cluster.name).font(.largeTitle.bold())
-                HStack(spacing: 12) {
-                    metaPill("num", "\(cluster.num)")
-                    metaPill("api", ":\(cluster.apiPort)")
-                    if let v = detail?.serverVersion {
-                        metaPill("k8s", v)
+                TimelineView(.periodic(from: .now, by: 60)) { context in
+                    HStack(spacing: 12) {
+                        metaPill("num", "\(cluster.num)")
+                        metaPill("api", ":\(cluster.apiPort)")
+                        if let v = detail?.serverVersion {
+                            metaPill("k8s", v)
+                        }
+                        if let createdAt = model.clusterCreatedAt[cluster.name] {
+                            metaPill("age", RelativeAge.format(since: createdAt, now: context.date))
+                        }
                     }
+                    .font(.callout)
                 }
-                .font(.callout)
             }
             Spacer()
             if detail?.loading == true {

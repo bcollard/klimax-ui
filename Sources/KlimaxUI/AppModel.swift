@@ -17,6 +17,11 @@ final class AppModel {
     var clustersLoading = false
     var clustersError: String?
 
+    // Cluster creation timestamps, sourced from the kube-system namespace.
+    // Cached because creation time never changes for a given cluster.
+    var clusterCreatedAt: [String: Date] = [:]
+    private var creationTimeTask: Task<Void, Never>?
+
     var selection: SidebarSelection?
 
     // Per-selected-cluster details (rebuilt on selection change).
@@ -176,6 +181,7 @@ final class AppModel {
         guard vm?.isRunning == true else {
             clusters = []
             clustersError = nil
+            clusterCreatedAt = [:]
             return
         }
         clustersLoading = true
@@ -186,6 +192,39 @@ final class AppModel {
         } catch {
             clusters = []
             clustersError = error.localizedDescription
+        }
+        pruneCreationTimes()
+        refreshCreationTimes()
+    }
+
+    private func pruneCreationTimes() {
+        let names = Set(clusters.map(\.name))
+        clusterCreatedAt = clusterCreatedAt.filter { names.contains($0.key) }
+    }
+
+    /// Fetch kube-system creation timestamps for any cluster we don't yet
+    /// have a cached value for. Creation time never changes, so we never
+    /// re-query a cluster we've already resolved.
+    private func refreshCreationTimes() {
+        let missing = clusters.filter { clusterCreatedAt[$0.name] == nil }
+        guard !missing.isEmpty else { return }
+        creationTimeTask?.cancel()
+        creationTimeTask = Task { [weak self] in
+            await withTaskGroup(of: (String, Date?).self) { group in
+                for c in missing {
+                    let kubeconfig = c.kubeconfigPath
+                    let name = c.name
+                    group.addTask {
+                        let date = await KubeClient(kubeconfigPath: kubeconfig)
+                            .kubeSystemCreationTime()
+                        return (name, date)
+                    }
+                }
+                for await (name, date) in group {
+                    guard !Task.isCancelled, let date else { continue }
+                    self?.clusterCreatedAt[name] = date
+                }
+            }
         }
     }
 

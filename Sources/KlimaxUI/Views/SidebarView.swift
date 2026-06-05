@@ -24,7 +24,7 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.clusters) { c in
-                        ClusterRow(cluster: c)
+                        ClusterRow(cluster: c, createdAt: model.clusterCreatedAt[c.name])
                             .tag(SidebarSelection.cluster(name: c.name))
                     }
                 }
@@ -50,6 +50,7 @@ struct SidebarView: View {
                     }
                     Spacer()
                 }
+                .padding(.bottom, 6)
             }
 
             Section {
@@ -67,6 +68,7 @@ struct SidebarView: View {
                 Text("Registry mirrors")
                     .font(.headline)
                     .textCase(nil)
+                    .padding(.bottom, 6)
             }
 
             if let version = model.klimaxVersion {
@@ -86,14 +88,23 @@ struct SidebarView: View {
 
 private struct ClusterRow: View {
     let cluster: KindCluster
+    let createdAt: Date?
 
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 1) {
                 Text(cluster.name)
-                Text("num \(cluster.num) · api :\(cluster.apiPort)")
-                    .font(.caption2)
-                    .foregroundStyle(.secondary)
+                if let createdAt {
+                    TimelineView(.periodic(from: .now, by: 60)) { context in
+                        Text(RelativeAge.format(since: createdAt, now: context.date))
+                            .font(.caption2.monospacedDigit())
+                            .foregroundStyle(.secondary)
+                    }
+                } else {
+                    Text("—")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
             }
         } icon: {
             Image(systemName: "circle.grid.3x3.fill")
@@ -222,10 +233,10 @@ private struct VMCard: View {
                     Button {
                         Task { await model.refreshAll() }
                     } label: {
-                        Image(systemName: "arrow.clockwise")
+                        Label("Refresh", systemImage: "arrow.clockwise")
                     }
                     .controlSize(.small)
-                    .help("Refresh")
+                    .help("Refresh VM, clusters, and mirrors")
                     Spacer()
                 }
             }

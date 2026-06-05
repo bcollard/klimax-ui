@@ -25,6 +25,8 @@ final class AppModel {
     // Time-series metrics per cluster (persists across selection changes).
     var metricsHistory: [String: MetricsHistory] = [:]
     var latestPods: [String: [PodMetric]] = [:]
+    // cluster name -> pod id ("ns/name") -> sample ring buffer.
+    var podHistory: [String: [String: PodMetricsHistory]] = [:]
     var metricsError: [String: String] = [:]
     private var metricsTask: Task<Void, Never>?
     private static let pollInterval: Duration = .seconds(15)
@@ -240,6 +242,22 @@ final class AppModel {
             history.append(sample)
             metricsHistory[clusterName] = history
             latestPods[clusterName] = pods
+
+            // Update per-pod history; prune entries whose latest sample is
+            // older than the oldest cluster sample we still keep (so pods that
+            // disappear roll off in step with the cluster's time window).
+            var perPod = podHistory[clusterName] ?? [:]
+            for pod in pods {
+                var h = perPod[pod.id] ?? PodMetricsHistory()
+                h.append(pod)
+                perPod[pod.id] = h
+            }
+            if let earliest = history.samples.first?.timestamp {
+                perPod = perPod.filter {
+                    ($0.value.samples.last?.timestamp ?? .distantPast) >= earliest
+                }
+            }
+            podHistory[clusterName] = perPod
             metricsError[clusterName] = nil
         } catch {
             metricsError[clusterName] = error.localizedDescription

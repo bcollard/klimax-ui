@@ -46,3 +46,20 @@ struct MetricsHistory: Sendable {
 
     mutating func clear() { samples.removeAll() }
 }
+
+/// Bounded ring buffer of pod samples for a single pod.
+struct PodMetricsHistory: Sendable {
+    private(set) var samples: [PodMetric] = []
+    let capacity: Int
+
+    init(capacity: Int = 60) {
+        self.capacity = capacity
+    }
+
+    mutating func append(_ sample: PodMetric) {
+        samples.append(sample)
+        if samples.count > capacity {
+            samples.removeFirst(samples.count - capacity)
+        }
+    }
+}

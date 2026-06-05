@@ -6,6 +6,9 @@ struct MetricsChartsView: View {
     let cluster: KindCluster
     /// Hover state shared by both charts so the rule + tooltip stay in sync.
     @State private var hoverTime: Date?
+    /// Pod id ("namespace/name") hovered in the Top pods table — overlays the
+    /// pod's history on both charts when set.
+    @State private var hoveredPodID: String?
 
     private var history: MetricsHistory {
         model.metricsHistory[cluster.name] ?? MetricsHistory()
@@ -21,6 +24,24 @@ struct MetricsChartsView: View {
         return history.samples.min {
             abs($0.timestamp.timeIntervalSince(t)) < abs($1.timestamp.timeIntervalSince(t))
         }
+    }
+    private var hoveredPodSamples: [PodMetric] {
+        guard let id = hoveredPodID,
+              let h = model.podHistory[cluster.name]?[id]
+        else { return [] }
+        return h.samples
+    }
+    /// The hovered pod's sample closest to `hoverTime`, if a chart hover is active.
+    private var hoveredPodSampleAtCursor: PodMetric? {
+        guard let t = hoverTime else { return nil }
+        return hoveredPodSamples.min {
+            abs($0.timestamp.timeIntervalSince(t)) < abs($1.timestamp.timeIntervalSince(t))
+        }
+    }
+    /// Display name for the tooltip's pod row.
+    private var hoveredPodName: String? {
+        guard let id = hoveredPodID else { return nil }
+        return id.split(separator: "/", maxSplits: 1).last.map(String.init) ?? id
     }
 
     var body: some View {
@@ -82,7 +103,8 @@ struct MetricsChartsView: View {
                 ForEach(history.samples) { sample in
                     LineMark(
                         x: .value("Time", sample.timestamp),
-                        y: .value("CPU (m)", sample.totalCPUMillicores)
+                        y: .value("CPU (m)", sample.totalCPUMillicores),
+                        series: .value("Series", "cluster")
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(.blue)
@@ -97,6 +119,15 @@ struct MetricsChartsView: View {
                         endPoint: .bottom
                     ))
                 }
+                ForEach(hoveredPodSamples) { sample in
+                    LineMark(
+                        x: .value("Time", sample.timestamp),
+                        y: .value("CPU (m)", sample.cpuMillicores),
+                        series: .value("Series", "pod")
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.orange)
+                }
                 if let hovered = hoveredSample {
                     RuleMark(x: .value("Time", hovered.timestamp))
                         .foregroundStyle(Color.secondary.opacity(0.4))
@@ -106,6 +137,14 @@ struct MetricsChartsView: View {
                     )
                     .foregroundStyle(.blue)
                     .symbolSize(80)
+                    if let podSample = hoveredPodSampleAtCursor {
+                        PointMark(
+                            x: .value("Time", podSample.timestamp),
+                            y: .value("CPU (m)", podSample.cpuMillicores)
+                        )
+                        .foregroundStyle(.orange)
+                        .symbolSize(80)
+                    }
                 }
             }
             .frame(height: 140)
@@ -122,7 +161,9 @@ struct MetricsChartsView: View {
                 hoverLayer(
                     proxy: proxy,
                     yValue: hoveredSample?.totalCPUMillicores,
-                    line: hoveredSample.map { String(format: "%.0f m", $0.totalCPUMillicores) }
+                    line: hoveredSample.map { String(format: "%.0f m", $0.totalCPUMillicores) },
+                    podLine: hoveredPodSampleAtCursor
+                        .map { String(format: "%.0f m", $0.cpuMillicores) }
                 )
             }
         }
@@ -137,7 +178,8 @@ struct MetricsChartsView: View {
                 ForEach(history.samples) { sample in
                     LineMark(
                         x: .value("Time", sample.timestamp),
-                        y: .value("Mem (MiB)", sample.totalMemoryMiB)
+                        y: .value("Mem (MiB)", sample.totalMemoryMiB),
+                        series: .value("Series", "cluster")
                     )
                     .interpolationMethod(.monotone)
                     .foregroundStyle(.green)
@@ -152,6 +194,15 @@ struct MetricsChartsView: View {
                         endPoint: .bottom
                     ))
                 }
+                ForEach(hoveredPodSamples) { sample in
+                    LineMark(
+                        x: .value("Time", sample.timestamp),
+                        y: .value("Mem (MiB)", sample.memoryMiB),
+                        series: .value("Series", "pod")
+                    )
+                    .interpolationMethod(.monotone)
+                    .foregroundStyle(.orange)
+                }
                 if let hovered = hoveredSample {
                     RuleMark(x: .value("Time", hovered.timestamp))
                         .foregroundStyle(Color.secondary.opacity(0.4))
@@ -161,6 +212,14 @@ struct MetricsChartsView: View {
                     )
                     .foregroundStyle(.green)
                     .symbolSize(80)
+                    if let podSample = hoveredPodSampleAtCursor {
+                        PointMark(
+                            x: .value("Time", podSample.timestamp),
+                            y: .value("Mem (MiB)", podSample.memoryMiB)
+                        )
+                        .foregroundStyle(.orange)
+                        .symbolSize(80)
+                    }
                 }
             }
             .frame(height: 140)
@@ -177,14 +236,21 @@ struct MetricsChartsView: View {
                 hoverLayer(
                     proxy: proxy,
                     yValue: hoveredSample?.totalMemoryMiB,
-                    line: hoveredSample.map { String(format: "%.0f MiB", $0.totalMemoryMiB) }
+                    line: hoveredSample.map { String(format: "%.0f MiB", $0.totalMemoryMiB) },
+                    podLine: hoveredPodSampleAtCursor
+                        .map { String(format: "%.0f MiB", $0.memoryMiB) }
                 )
             }
         }
     }
 
     @ViewBuilder
-    private func hoverLayer(proxy: ChartProxy, yValue: Double?, line: String?) -> some View {
+    private func hoverLayer(
+        proxy: ChartProxy,
+        yValue: Double?,
+        line: String?,
+        podLine: String?
+    ) -> some View {
         GeometryReader { geo in
             Rectangle()
                 .fill(.clear)
@@ -212,7 +278,7 @@ struct MetricsChartsView: View {
                 let rect = geo[plot]
                 let xAbs = rect.minX + xRel
                 let yAbs = rect.minY + yRel
-                tooltip(time: s.timestamp, line: line)
+                tooltip(time: s.timestamp, line: line, podLine: podLine, podName: hoveredPodName)
                     .fixedSize()
                     .position(
                         x: min(max(xAbs, rect.minX + 50), rect.maxX - 50),
@@ -223,13 +289,28 @@ struct MetricsChartsView: View {
         }
     }
 
-    private func tooltip(time: Date, line: String) -> some View {
+    private func tooltip(time: Date, line: String, podLine: String?, podName: String?) -> some View {
         VStack(alignment: .leading, spacing: 2) {
             Text(time, format: .dateTime.hour().minute().second())
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Text(line)
-                .font(.caption.bold().monospacedDigit())
+            HStack(spacing: 6) {
+                Circle().fill(.blue).frame(width: 6, height: 6)
+                Text(line)
+                    .font(.caption.bold().monospacedDigit())
+            }
+            if let podLine, let podName {
+                HStack(spacing: 6) {
+                    Circle().fill(.orange).frame(width: 6, height: 6)
+                    Text(podLine)
+                        .font(.caption.bold().monospacedDigit())
+                    Text(podName)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
         }
         .padding(.horizontal, 8)
         .padding(.vertical, 5)
@@ -264,6 +345,7 @@ struct MetricsChartsView: View {
         VStack(alignment: .leading, spacing: 4) {
             Text(title).font(.caption).foregroundStyle(.tertiary)
             ForEach(rows(), id: \.0.id) { pod, value in
+                let isHovered = hoveredPodID == pod.id
                 HStack {
                     VStack(alignment: .leading, spacing: 1) {
                         Text(pod.name)
@@ -279,7 +361,20 @@ struct MetricsChartsView: View {
                         .font(.callout.monospacedDigit())
                         .foregroundStyle(.secondary)
                 }
-                .padding(.vertical, 1)
+                .padding(.vertical, 2)
+                .padding(.horizontal, 4)
+                .background(
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(isHovered ? Color.orange.opacity(0.15) : .clear)
+                )
+                .contentShape(Rectangle())
+                .onHover { hovering in
+                    if hovering {
+                        hoveredPodID = pod.id
+                    } else if hoveredPodID == pod.id {
+                        hoveredPodID = nil
+                    }
+                }
             }
         }
         .frame(maxWidth: .infinity, alignment: .leading)

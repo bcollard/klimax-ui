@@ -110,6 +110,7 @@ private struct EndpointRow: View {
     let probe: AppModel.ProbeResult?
 
     private var isTCP: Bool { port.protocolValue.uppercased() == "TCP" }
+    private var endpoint: String { "\(ip):\(port.port)" }
 
     private var url: URL? {
         let scheme = scheme(for: port)
@@ -131,7 +132,7 @@ private struct EndpointRow: View {
                 Link(url.absoluteString, destination: url)
                     .font(.system(.callout, design: .monospaced))
             } else {
-                Text("\(ip):\(port.port)")
+                Text(verbatim: endpoint)
                     .font(.system(.callout, design: .monospaced))
                     .textSelection(.enabled)
             }
@@ -141,7 +142,7 @@ private struct EndpointRow: View {
                     .foregroundStyle(.secondary)
             }
             if let target = port.targetPortString {
-                Text("→ \(target)")
+                Text(verbatim: "→ \(target)")
                     .font(.caption.monospacedDigit())
                     .foregroundStyle(.tertiary)
             }
@@ -149,12 +150,12 @@ private struct EndpointRow: View {
             Button {
                 let pb = NSPasteboard.general
                 pb.clearContents()
-                pb.setString("\(ip):\(port.port)", forType: .string)
+                pb.setString(endpoint, forType: .string)
             } label: {
                 Image(systemName: "doc.on.doc")
             }
             .buttonStyle(.borderless)
-            .help("Copy \(ip):\(port.port)")
+            .help("Copy \(endpoint)")
         }
     }
 

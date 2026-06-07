@@ -11,6 +11,18 @@ struct RootView: View {
         } detail: {
             detailView
         }
+        .toolbar {
+            ToolbarItem(placement: .primaryAction) {
+                Button {
+                    Task { await model.refreshAll() }
+                } label: {
+                    Label("Refresh", systemImage: "arrow.clockwise")
+                }
+                .keyboardShortcut("r", modifiers: .command)
+                .disabled(model.inFlightAction != nil)
+                .help("Refresh VM, clusters, and mirrors (⌘R)")
+            }
+        }
         .task {
             await model.bootstrap()
         }

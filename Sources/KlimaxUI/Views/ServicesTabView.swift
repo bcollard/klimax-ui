@@ -45,13 +45,6 @@ struct ServicesTabView: View {
                     .font(.caption.monospaced())
                     .foregroundStyle(.tertiary)
             }
-            Button {
-                Task { await model.loadClusterDetail(for: cluster) }
-            } label: {
-                Image(systemName: "arrow.clockwise")
-            }
-            .controlSize(.small)
-            .help("Re-fetch services and re-probe endpoints")
         }
     }
 }

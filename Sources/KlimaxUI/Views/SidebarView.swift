@@ -230,13 +230,6 @@ private struct VMCard: View {
                         .controlSize(.small)
                         .buttonStyle(.borderedProminent)
                     }
-                    Button {
-                        Task { await model.refreshAll() }
-                    } label: {
-                        Label("Refresh", systemImage: "arrow.clockwise")
-                    }
-                    .controlSize(.small)
-                    .help("Refresh VM, clusters, and mirrors")
                     Spacer()
                 }
             }

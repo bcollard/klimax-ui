@@ -113,12 +113,6 @@ struct ClusterDetailView: View {
             if detail?.loading == true {
                 ProgressView().controlSize(.small)
             }
-            Button {
-                Task { await model.loadClusterDetail(for: cluster) }
-            } label: {
-                Label("Refresh", systemImage: "arrow.clockwise")
-            }
-            .disabled(model.inFlightAction != nil)
             Button(role: .destructive) {
                 Task { await model.deleteCluster(named: cluster.name) }
             } label: {

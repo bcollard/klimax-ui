@@ -28,6 +28,7 @@ struct ClusterDetailView: View {
                 }
                 .pickerStyle(.segmented)
                 .frame(maxWidth: 360, alignment: .leading)
+                .padding(.top, 10)
             }
             .padding(.horizontal, 20)
             .padding(.top, 20)
@@ -100,6 +101,12 @@ struct ClusterDetailView: View {
                         }
                         if let createdAt = model.clusterCreatedAt[cluster.name] {
                             metaPill("age", RelativeAge.format(since: createdAt, now: context.date))
+                        }
+                        if let region = nodeLabels?[Self.regionLabelKey] {
+                            metaPill("region", region)
+                        }
+                        if let zone = nodeLabels?[Self.zoneLabelKey] {
+                            metaPill("zone", zone)
                         }
                     }
                     .font(.callout)
@@ -212,23 +219,68 @@ struct ClusterDetailView: View {
     private var labelsRow: some View {
         FlowLayout(spacing: 6) {
             if let labels = nodeLabels {
-                ForEach(AppModel.displayLabels(labels), id: \.key) { pair in
-                    metaPill(Self.shortLabelKey(pair.key), pair.value)
+                // region/zone are promoted to the meta line next to k8s.
+                let rest = AppModel.displayLabels(labels).filter {
+                    $0.key != Self.regionLabelKey && $0.key != Self.zoneLabelKey
+                }
+                ForEach(rest, id: \.key) { pair in
+                    if pair.key == Self.fleetLabelKey {
+                        fleetBadge(pair.value)
+                    } else {
+                        metaPill(Self.shortLabelKey(pair.key), pair.value)
+                    }
                 }
             }
-            Button {
-                newLabelKey = ""
-                newLabelValue = ""
-                showAddLabel = true
-            } label: {
-                Label("Add label", systemImage: "plus")
-                    .font(.caption)
-            }
-            .buttonStyle(.borderless)
-            .disabled(model.inFlightAction != nil || (detail?.nodes.isEmpty ?? true))
-            .help("Add a node label to every node")
-            .popover(isPresented: $showAddLabel, arrowEdge: .bottom) { addLabelForm }
+            addLabelButton
         }
+    }
+
+    static let fleetLabelKey = "klimax.dev/fleet"
+    static let regionLabelKey = "topology.kubernetes.io/region"
+    static let zoneLabelKey = "topology.kubernetes.io/zone"
+
+    /// Fleet gets a distinct filled badge with the stack icon so it stands out
+    /// from the plain grey label pills.
+    private func fleetBadge(_ value: String) -> some View {
+        HStack(spacing: 4) {
+            Image(systemName: "square.stack.3d.up.fill")
+            Text(value).bold()
+        }
+        .font(.caption)
+        .foregroundStyle(.white)
+        .padding(.horizontal, 8)
+        .padding(.vertical, 3)
+        .background(Capsule().fill(Color.blue))
+        .help("Fleet: \(value)")
+    }
+
+    /// Dashed-blue "Add label" chip — mirrors the New Cluster tile's dashed
+    /// border, sized like the label pills so its text aligns with them.
+    private var addLabelButton: some View {
+        Button {
+            newLabelKey = ""
+            newLabelValue = ""
+            showAddLabel = true
+        } label: {
+            HStack(spacing: 4) {
+                Image(systemName: "plus")
+                Text("Add label")
+            }
+            .font(.caption)
+            .foregroundStyle(.blue)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .overlay(
+                Capsule().strokeBorder(
+                    Color.blue.opacity(0.7),
+                    style: StrokeStyle(lineWidth: 1, dash: [4, 3])
+                )
+            )
+        }
+        .buttonStyle(.plain)
+        .disabled(model.inFlightAction != nil || (detail?.nodes.isEmpty ?? true))
+        .help("Add a node label to every node")
+        .popover(isPresented: $showAddLabel, arrowEdge: .bottom) { addLabelForm }
     }
 
     private var addLabelForm: some View {

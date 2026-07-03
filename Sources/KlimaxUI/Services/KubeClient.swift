@@ -68,15 +68,6 @@ struct KubeClient: Sendable {
         return ISO8601DateFormatter().date(from: raw)
     }
 
-    /// Apply a label to every node (matches how klimax labels at creation —
-    /// `kubectl label nodes --all --overwrite`). Returns the process result.
-    func labelAllNodes(key: String, value: String) async throws -> ProcessResult {
-        try await ProcessRunner.run(
-            "kubectl",
-            baseArgs(["label", "nodes", "--all", "--overwrite", "\(key)=\(value)"])
-        )
-    }
-
     func clusterVersion() async -> String? {
         let args = baseArgs(["version", "-o", "json"])
         guard let result = try? await ProcessRunner.run("kubectl", args), result.ok else {

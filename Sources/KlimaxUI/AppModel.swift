@@ -645,8 +645,7 @@ final class AppModel {
     func addLabel(to cluster: KindCluster, key: String, value: String) async {
         clusterLabels[cluster.name] = nil  // invalidate so refreshAll refetches
         await runAction("Label \(cluster.name): \(key)=\(value)") {
-            try await KubeClient(kubeconfigPath: cluster.kubeconfigPath)
-                .labelAllNodes(key: key, value: value)
+            try await KlimaxCLI.labelCluster(name: cluster.name, key: key, value: value)
         }
     }
 

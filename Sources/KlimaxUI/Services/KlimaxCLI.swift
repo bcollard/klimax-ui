@@ -54,6 +54,14 @@ enum KlimaxCLI {
         try await ProcessRunner.run(executable, ["cluster", "create", name])
     }
 
+    /// Set/overwrite a node label on an existing cluster (klimax 0.1.35+):
+    /// `klimax cluster label <name> -l key=value`. This is klimax's canonical
+    /// relabel path (shared with create-time labeling); prefer it over a raw
+    /// kubectl label so behavior stays consistent.
+    static func labelCluster(name: String, key: String, value: String) async throws -> ProcessResult {
+        try await ProcessRunner.run(executable, ["cluster", "label", name, "-l", "\(key)=\(value)"])
+    }
+
     /// Delete a kind cluster by name. `-y` skips the interactive confirmation
     /// prompt klimax shows by default (which would otherwise hang our Process).
     static func deleteCluster(name: String) async throws -> ProcessResult {

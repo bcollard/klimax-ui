@@ -39,8 +39,8 @@ struct ClusterDetailView: View {
                     }
                     switch tab {
                     case .info:
-                        nodesCard
                         podsCard
+                        nodesCard
                         kubeconfigCard
                     case .services:
                         ServicesTabView(
@@ -108,6 +108,13 @@ struct ClusterDetailView: View {
             if detail?.loading == true {
                 ProgressView().controlSize(.small)
             }
+            Button {
+                Task { await model.useContext(for: cluster) }
+            } label: {
+                Label("Switch to context", systemImage: "arrow.right.circle")
+            }
+            .disabled(model.inFlightAction != nil)
+            .help("Set kubectl's current-context to \(cluster.name)")
             Button(role: .destructive) {
                 Task { await model.deleteCluster(named: cluster.name) }
             } label: {
@@ -236,12 +243,19 @@ struct ClusterDetailView: View {
                                      color: phaseColor(phase))
                         }
                         Spacer()
-                        Text("\(pods.count) total")
+                        Text("\(pods.count) pods total")
                             .font(.caption)
                             .foregroundStyle(.secondary)
                     }
                     Divider()
                     VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Text("Namespace")
+                            Spacer()
+                            Text("Pods")
+                        }
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
                         ForEach(byNs.keys.sorted(), id: \.self) { ns in
                             HStack {
                                 Text(ns).font(.callout.monospaced())

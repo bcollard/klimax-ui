@@ -546,6 +546,15 @@ final class AppModel {
         }
     }
 
+    /// Set kubectl's current-context (in the default kubeconfig) to this
+    /// cluster. klimax merges each cluster into ~/.kube/config under a context
+    /// named after the cluster, so `use-context <name>` targets it directly.
+    func useContext(for cluster: KindCluster) async {
+        await runAction("Switching kubectl context to \(cluster.name)") {
+            try await ProcessRunner.run("kubectl", ["config", "use-context", cluster.name])
+        }
+    }
+
     func installMetricsServer(for cluster: KindCluster) async {
         await runAction("Installing metrics-server on \(cluster.name)") {
             try await Helm(kubeconfigPath: cluster.kubeconfigPath).installMetricsServer()

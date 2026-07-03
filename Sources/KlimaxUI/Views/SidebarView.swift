@@ -24,8 +24,12 @@ struct SidebarView: View {
                     .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.clusters) { c in
-                        ClusterRow(cluster: c, createdAt: model.clusterCreatedAt[c.name])
-                            .tag(SidebarSelection.cluster(name: c.name))
+                        ClusterRow(
+                            cluster: c,
+                            createdAt: model.clusterCreatedAt[c.name],
+                            isCurrentContext: model.currentKubeContext == c.name
+                        )
+                        .tag(SidebarSelection.cluster(name: c.name))
                     }
                     if let name = model.provisioningClusterName {
                         ProvisioningRow(name: name, failed: model.creation?.failed == true)
@@ -75,8 +79,18 @@ struct SidebarView: View {
                     .padding(.bottom, 6)
             }
 
-            if let version = model.klimaxVersion {
-                Section {
+            Section {
+                HStack(spacing: 4) {
+                    Image(systemName: "cube")
+                    Text(model.currentKubeContext ?? "no kube context")
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+                .font(.caption2)
+                .foregroundStyle(model.currentKubeContext == nil ? .tertiary : .secondary)
+                .help("kubectl current-context")
+
+                if let version = model.klimaxVersion {
                     Text(version)
                         .font(.caption)
                         .foregroundStyle(.tertiary)
@@ -93,11 +107,23 @@ struct SidebarView: View {
 private struct ClusterRow: View {
     let cluster: KindCluster
     let createdAt: Date?
+    var isCurrentContext: Bool = false
 
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 1) {
-                Text(cluster.name)
+                HStack(spacing: 6) {
+                    Text(cluster.name)
+                    if isCurrentContext {
+                        Text("current")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.tint)
+                            .padding(.horizontal, 5)
+                            .padding(.vertical, 1)
+                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                            .help("kubectl current-context")
+                    }
+                }
                 if let createdAt {
                     TimelineView(.periodic(from: .now, by: 60)) { context in
                         Text(RelativeAge.format(since: createdAt, now: context.date))

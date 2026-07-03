@@ -17,6 +17,12 @@ final class AppModel {
     var clustersLoading = false
     var clustersError: String?
 
+    // kubectl's current-context (from the default kubeconfig). klimax names each
+    // cluster's context after the cluster, so this both badges the active cluster
+    // in the sidebar and may hold a non-klimax context (shown in the footer).
+    // Refreshed on refreshAll() and after a context switch.
+    var currentKubeContext: String?
+
     // Cluster creation timestamps, sourced from the kube-system namespace.
     // Cached because creation time never changes for a given cluster.
     var clusterCreatedAt: [String: Date] = [:]
@@ -175,6 +181,7 @@ final class AppModel {
         config = InstanceDiscovery.loadConfig()
         vm = resolveSingleInstance()
         await refreshClusters()
+        await refreshCurrentKubeContext()
         if let vm, vm.isRunning, let ssh = vm.ssh {
             let guest = GuestSSH(endpoint: ssh)
             async let ipTask = guest.lima0IP()
@@ -225,6 +232,18 @@ final class AppModel {
         }
         pruneCreationTimes()
         refreshCreationTimes()
+    }
+
+    /// Read kubectl's current-context from the default kubeconfig. Nil when
+    /// unset (kubectl exits non-zero) or on any error.
+    func refreshCurrentKubeContext() async {
+        if let result = try? await ProcessRunner.run("kubectl", ["config", "current-context"]),
+           result.ok {
+            let ctx = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+            currentKubeContext = ctx.isEmpty ? nil : ctx
+        } else {
+            currentKubeContext = nil
+        }
     }
 
     private func pruneCreationTimes() {

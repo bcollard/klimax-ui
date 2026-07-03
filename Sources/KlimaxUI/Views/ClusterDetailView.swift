@@ -108,13 +108,19 @@ struct ClusterDetailView: View {
             if detail?.loading == true {
                 ProgressView().controlSize(.small)
             }
-            Button {
-                Task { await model.useContext(for: cluster) }
-            } label: {
-                Label("Switch to context", systemImage: "arrow.right.circle")
+            if model.currentKubeContext == cluster.name {
+                Label("Current context", systemImage: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .help("kubectl current-context is \(cluster.name)")
+            } else {
+                Button {
+                    Task { await model.useContext(for: cluster) }
+                } label: {
+                    Label("Switch to context", systemImage: "arrow.right.circle")
+                }
+                .disabled(model.inFlightAction != nil)
+                .help("Set kubectl's current-context to \(cluster.name)")
             }
-            .disabled(model.inFlightAction != nil)
-            .help("Set kubectl's current-context to \(cluster.name)")
             Button(role: .destructive) {
                 Task { await model.deleteCluster(named: cluster.name) }
             } label: {

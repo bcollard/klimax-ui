@@ -4,6 +4,9 @@ struct ClusterDetailView: View {
     @Bindable var model: AppModel
     let cluster: KindCluster
     @State private var tab: Tab = .info
+    @State private var showAddLabel = false
+    @State private var newLabelKey = ""
+    @State private var newLabelValue = ""
 
     enum Tab: Hashable { case info, services, metrics }
 
@@ -41,7 +44,6 @@ struct ClusterDetailView: View {
                     case .info:
                         podsCard
                         nodesCard
-                        labelsCard
                         kubeconfigCard
                     case .services:
                         ServicesTabView(
@@ -89,24 +91,20 @@ struct ClusterDetailView: View {
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 4) {
+            VStack(alignment: .leading, spacing: 8) {
                 Text(cluster.name).font(.largeTitle.bold())
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     HStack(spacing: 12) {
-                        metaPill("num", "\(cluster.num)")
-                        metaPill("api", ":\(cluster.apiPort)")
                         if let v = detail?.serverVersion {
                             metaPill("k8s", v)
                         }
                         if let createdAt = model.clusterCreatedAt[cluster.name] {
                             metaPill("age", RelativeAge.format(since: createdAt, now: context.date))
                         }
-                        if let fleet = nodeLabels?["klimax.dev/fleet"] {
-                            metaPill("fleet", fleet)
-                        }
                     }
                     .font(.callout)
                 }
+                labelsRow
             }
             Spacer()
             if detail?.loading == true {
@@ -210,38 +208,63 @@ struct ClusterDetailView: View {
         detail?.nodes.first?.metadata.labels
     }
 
-    private var labelsCard: some View {
-        GroupBox("Node labels") {
+    /// Wrapping row of node-label pills under the title, plus an add button.
+    private var labelsRow: some View {
+        FlowLayout(spacing: 6) {
             if let labels = nodeLabels {
-                let shown = AppModel.displayLabels(labels)
-                if shown.isEmpty {
-                    Text("No klimax labels.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .padding(.vertical, 4)
-                } else {
-                    VStack(alignment: .leading, spacing: 4) {
-                        ForEach(shown, id: \.key) { pair in
-                            HStack(alignment: .firstTextBaseline) {
-                                Text(pair.key)
-                                    .font(.caption.monospaced())
-                                    .foregroundStyle(.secondary)
-                                Spacer()
-                                Text(pair.value)
-                                    .font(.caption.monospaced())
-                                    .textSelection(.enabled)
-                            }
-                        }
-                    }
-                    .padding(4)
+                ForEach(AppModel.displayLabels(labels), id: \.key) { pair in
+                    metaPill(Self.shortLabelKey(pair.key), pair.value)
                 }
-            } else {
-                Text(detail?.loading == true ? "Loading…" : "No nodes.")
-                    .font(.callout)
-                    .foregroundStyle(.secondary)
-                    .padding(.vertical, 4)
+            }
+            Button {
+                newLabelKey = ""
+                newLabelValue = ""
+                showAddLabel = true
+            } label: {
+                Label("Add label", systemImage: "plus")
+                    .font(.caption)
+            }
+            .buttonStyle(.borderless)
+            .disabled(model.inFlightAction != nil || (detail?.nodes.isEmpty ?? true))
+            .help("Add a node label to every node")
+            .popover(isPresented: $showAddLabel, arrowEdge: .bottom) { addLabelForm }
+        }
+    }
+
+    private var addLabelForm: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Add node label").font(.headline)
+            Text("Applied to every node with `kubectl label --overwrite`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            TextField("key (e.g. klimax.dev/fleet)", text: $newLabelKey)
+                .textFieldStyle(.roundedBorder)
+            TextField("value", text: $newLabelValue)
+                .textFieldStyle(.roundedBorder)
+            HStack {
+                Spacer()
+                Button("Cancel") { showAddLabel = false }
+                Button("Add") { submitLabel() }
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(newLabelKey.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
+        .padding(16)
+        .frame(width: 320)
+    }
+
+    private func submitLabel() {
+        let key = newLabelKey.trimmingCharacters(in: .whitespacesAndNewlines)
+        let value = newLabelValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        showAddLabel = false
+        guard !key.isEmpty else { return }
+        Task { await model.addLabel(to: cluster, key: key, value: value) }
+    }
+
+    /// Shorten a label key to its last path segment for compact pills
+    /// (klimax.dev/fleet → fleet, topology.kubernetes.io/region → region).
+    static func shortLabelKey(_ key: String) -> String {
+        key.split(separator: "/").last.map(String.init) ?? key
     }
 
     private func nodeRow(_ n: KubeNode) -> some View {

@@ -640,6 +640,16 @@ final class AppModel {
         startVMPollingIfRunning()
     }
 
+    /// Add (or overwrite) a node label on every node of a cluster, then refresh
+    /// its cached labels and reloaded detail so the new label shows immediately.
+    func addLabel(to cluster: KindCluster, key: String, value: String) async {
+        clusterLabels[cluster.name] = nil  // invalidate so refreshAll refetches
+        await runAction("Label \(cluster.name): \(key)=\(value)") {
+            try await KubeClient(kubeconfigPath: cluster.kubeconfigPath)
+                .labelAllNodes(key: key, value: value)
+        }
+    }
+
     /// Set kubectl's current-context (in the default kubeconfig) to this
     /// cluster. klimax merges each cluster into ~/.kube/config under a context
     /// named after the cluster, so `use-context <name>` targets it directly.

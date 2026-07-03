@@ -64,6 +64,29 @@ final class AppModel {
     var inFlightAction: String?
     var actionLog: String = ""
 
+    // Live `klimax cluster create` session. Present from the moment the user
+    // confirms creation until they navigate away (or it's superseded). Drives
+    // the placeholder card/row in the lists and the streaming log view.
+    var creation: Creation?
+
+    struct Creation: Sendable {
+        var name: String
+        var log: String = ""
+        var running: Bool = true
+        var failed: Bool = false
+        /// klimax's own "non-default kind node version — UNSUPPORTED" warning,
+        /// surfaced verbatim when it appears in the create output.
+        var versionWarning: String?
+    }
+
+    /// Name of a cluster currently being provisioned that isn't in `clusters`
+    /// yet — used to render a placeholder in the sidebar and overview.
+    var provisioningClusterName: String? {
+        guard let creation, !clusters.contains(where: { $0.name == creation.name })
+        else { return nil }
+        return creation.name
+    }
+
     struct ClusterDetail: Sendable {
         var cluster: KindCluster
         var nodes: [KubeNode] = []
@@ -158,8 +181,11 @@ final class AppModel {
             guestLima0IP = nil
             guestStats = nil
         }
-        // Drop stale selection.
-        if case .cluster(let name) = selection, !clusters.contains(where: { $0.name == name }) {
+        // Drop stale selection — but keep it while that cluster is still
+        // provisioning (it isn't in `clusters` yet by design).
+        if case .cluster(let name) = selection,
+           !clusters.contains(where: { $0.name == name }),
+           creation?.name != name {
             selection = nil
         }
         if case .mirror(let name) = selection, !mirrors.contains(where: { $0.name == name }) {
@@ -434,9 +460,54 @@ final class AppModel {
     }
 
     func createCluster(named name: String) async {
-        await runAction("Creating cluster \(name)") {
-            try await KlimaxCLI.createCluster(name: name)
+        guard inFlightAction == nil, creation?.running != true else { return }
+        let label = "Creating cluster \(name)"
+        inFlightAction = label
+        actionLog = ""
+        creation = Creation(name: name)
+        // Surface the placeholder and its live log immediately.
+        selection = .cluster(name: name)
+
+        for await event in ProcessRunner.stream(
+            KlimaxCLI.executable, ["cluster", "create", name]
+        ) {
+            switch event {
+            case .output(let text):
+                creation?.log = text
+                if creation?.versionWarning == nil,
+                   let warning = Self.detectVersionWarning(in: text) {
+                    creation?.versionWarning = warning
+                }
+            case .finished(let result):
+                creation?.running = false
+                creation?.failed = !result.ok
+                actionLog = combinedLog(label: label, result: result)
+            }
         }
+
+        inFlightAction = nil
+        await refreshAll()
+        startVMPollingIfRunning()
+        // On success the real cluster is now in the list; drop the session so
+        // ClusterDetailView takes over. On failure keep it so the log stays put.
+        if creation?.failed == false, clusters.contains(where: { $0.name == name }) {
+            creation = nil
+        }
+    }
+
+    /// Extract klimax's mismatch warning line, if present. klimax logs (to
+    /// stderr) `level=WARN msg="Using a non-default kind node version — …"`
+    /// with `requested`/`recommended` fields whenever the configured
+    /// nodeVersion differs from the one its bundled kind CLI is validated
+    /// against. We surface that verbatim rather than hardcode the default.
+    static func detectVersionWarning(in text: String) -> String? {
+        for line in text.split(whereSeparator: \.isNewline) {
+            let lower = line.lowercased()
+            guard lower.contains("non-default kind node version")
+                    || lower.contains("unsupported") && lower.contains("node") else { continue }
+            return line.trimmingCharacters(in: .whitespaces)
+        }
+        return nil
     }
 
     func deleteCluster(named name: String) async {
@@ -463,6 +534,7 @@ final class AppModel {
     private func runAction(_ label: String, _ work: () async throws -> ProcessResult) async {
         inFlightAction = label
         actionLog = ""
+        creation = nil  // a new action supersedes any finished create session
         defer { inFlightAction = nil }
         do {
             let result = try await work()

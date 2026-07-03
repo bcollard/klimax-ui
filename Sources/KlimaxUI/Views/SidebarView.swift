@@ -14,7 +14,7 @@ struct SidebarView: View {
             }
 
             Section {
-                if model.clusters.isEmpty {
+                if model.clusters.isEmpty && model.provisioningClusterName == nil {
                     Text(
                         model.vm?.isRunning == true
                         ? "No clusters yet."
@@ -26,6 +26,10 @@ struct SidebarView: View {
                     ForEach(model.clusters) { c in
                         ClusterRow(cluster: c, createdAt: model.clusterCreatedAt[c.name])
                             .tag(SidebarSelection.cluster(name: c.name))
+                    }
+                    if let name = model.provisioningClusterName {
+                        ProvisioningRow(name: name, failed: model.creation?.failed == true)
+                            .tag(SidebarSelection.cluster(name: name))
                     }
                 }
             } header: {
@@ -113,6 +117,28 @@ private struct ClusterRow: View {
     }
 }
 
+private struct ProvisioningRow: View {
+    let name: String
+    let failed: Bool
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(name)
+                Text(failed ? "failed" : "creating…")
+                    .font(.caption2)
+                    .foregroundStyle(failed ? .red : .secondary)
+            }
+        } icon: {
+            if failed {
+                Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+            } else {
+                ProgressView().controlSize(.mini)
+            }
+        }
+    }
+}
+
 private struct MirrorRow: View {
     let mirror: KlimaxConfig.Registries.Mirror
 
@@ -184,18 +210,35 @@ private struct VMCard: View {
                             metaRow("CPUs", vm.lima?.cpus.map(String.init) ?? "—")
                             metaRow("Memory", vm.lima?.memory ?? "—")
                             metaRow("Disk", vm.lima?.disk ?? "—")
-                            if let ip = model.guestLima0IP {
-                                metaRow("lima0", ip)
-                            }
-                            if let load = model.guestStats?.loadAvg?.split(separator: " ").prefix(3).joined(separator: " ") {
-                                metaRow("Load", load)
+                            if let loadAvg = model.guestStats?.loadAvg {
+                                let parts = loadAvg.split(separator: " ")
+                                let load = parts.prefix(3).joined(separator: " ")
+                                metaRow("Load", load, valueColor: loadColor(parts.first))
                             }
                             if let total = model.guestStats?.memTotalKB,
                                let avail = model.guestStats?.memAvailableKB
                             {
                                 let usedGiB = Double(total - avail) / 1024 / 1024
                                 let totalGiB = Double(total) / 1024 / 1024
-                                metaRow("Used", String(format: "%.1f / %.1f GiB", usedGiB, totalGiB))
+                                let ratio = total > 0 ? Double(total - avail) / Double(total) : 0
+                                HStack {
+                                    Text("Used")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                    Spacer()
+                                    // Only the current usage is tinted; the total
+                                    // allocation stays in the default color.
+                                    (
+                                        Text(String(format: "%.1f", usedGiB))
+                                            .foregroundColor(usageColor(ratio, warn: 0.7, crit: 0.9))
+                                        + Text(String(format: " / %.1f GiB", totalGiB))
+                                    )
+                                    .font(.caption.monospacedDigit())
+                                    .textSelection(.enabled)
+                                }
+                            }
+                            if let ip = model.guestLima0IP {
+                                metaRow("IP address (lima0)", ip)
                             }
                         }
                     }
@@ -250,7 +293,7 @@ private struct VMCard: View {
         }
     }
 
-    private func metaRow(_ k: String, _ v: String) -> some View {
+    private func metaRow(_ k: String, _ v: String, valueColor: Color? = nil) -> some View {
         HStack {
             Text(k)
                 .foregroundStyle(.secondary)
@@ -258,8 +301,25 @@ private struct VMCard: View {
             Spacer()
             Text(v)
                 .font(.caption.monospacedDigit())
+                .foregroundStyle(valueColor ?? .primary)
                 .textSelection(.enabled)
         }
+    }
+
+    /// Traffic-light color for a 0…1 usage ratio.
+    private func usageColor(_ ratio: Double, warn: Double, crit: Double) -> Color {
+        if ratio >= crit { return .red }
+        if ratio >= warn { return .orange }
+        return .green
+    }
+
+    /// Color the 1-minute load average relative to the VM's core count
+    /// (load == cores means fully saturated). Nil when we can't compute a ratio.
+    private func loadColor(_ oneMinuteField: Substring?) -> Color? {
+        guard let oneMinuteField, let load = Double(oneMinuteField),
+              let cores = model.vm?.lima?.cpus, cores > 0
+        else { return nil }
+        return usageColor(load / Double(cores), warn: 0.7, crit: 1.0)
     }
 }
 

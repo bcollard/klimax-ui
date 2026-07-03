@@ -96,6 +96,14 @@ struct OverviewDetailView: View {
                         model.selection = .cluster(name: c.name)
                     }
                 }
+                if let name = model.provisioningClusterName {
+                    ProvisioningClusterCard(
+                        name: name,
+                        failed: model.creation?.failed == true
+                    ) {
+                        model.selection = .cluster(name: name)
+                    }
+                }
                 NewClusterCard(
                     disabled: model.vm?.isRunning != true || model.inFlightAction != nil,
                     disabledReason: model.vm?.isRunning == true ? nil : "Start the VM first"
@@ -132,16 +140,7 @@ struct OverviewDetailView: View {
     // MARK: - Action log
 
     private var actionLogCard: some View {
-        GroupBox("Last action") {
-            ScrollView {
-                Text(model.actionLog)
-                    .font(.system(.caption, design: .monospaced))
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(8)
-            }
-            .frame(maxHeight: 200)
-        }
+        LogConsoleView(title: "Last action", text: model.actionLog, maxHeight: 200)
     }
 
     // MARK: - Bits
@@ -250,6 +249,48 @@ private struct MirrorCard: View {
                     pill(":\(mirror.port)")
                     pill(remoteHost)
                 }
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(hovering ? 0.15 : 0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(hovering ? 0.25 : 0), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+    }
+}
+
+private struct ProvisioningClusterCard: View {
+    let name: String
+    let failed: Bool
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    if failed {
+                        Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
+                    } else {
+                        ProgressView().controlSize(.small)
+                    }
+                    Text(name).font(.headline)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                }
+                Text(failed ? "Creation failed — tap for log" : "Creating… tap to follow log")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             }
             .padding(12)
             .frame(maxWidth: .infinity, alignment: .leading)

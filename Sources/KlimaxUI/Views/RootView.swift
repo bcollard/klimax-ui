@@ -35,7 +35,10 @@ struct RootView: View {
     private var detailView: some View {
         switch model.selection {
         case .cluster(let name):
-            if let cluster = model.clusters.first(where: { $0.name == name }) {
+            if let creation = model.creation, creation.name == name,
+               creation.running || !model.clusters.contains(where: { $0.name == name }) {
+                ClusterCreatingView(model: model, creation: creation)
+            } else if let cluster = model.clusters.first(where: { $0.name == name }) {
                 ClusterDetailView(model: model, cluster: cluster)
             } else {
                 OverviewDetailView(model: model)

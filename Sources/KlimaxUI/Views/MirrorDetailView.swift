@@ -8,6 +8,26 @@ struct MirrorDetailView: View {
         model.mirrorCacheSizes[mirror.name]
     }
 
+    /// The registry host that pulls get rewritten from. klimax aliases
+    /// registry-1.docker.io to the user-facing "docker.io", so surface that.
+    private var interceptedHost: String {
+        let host = URL(string: mirror.remoteURL)?.host ?? mirror.remoteURL
+        return host.contains("docker.io") ? "docker.io" : host
+    }
+
+    /// Ties the "Intercepts" value to the same term in the Usage paragraph.
+    static let hostColor: Color = .blue
+
+    /// A concrete image reference for the intercepted registry, for the example.
+    private var exampleImage: String {
+        switch interceptedHost {
+        case "docker.io": return "docker.io/library/nginx:latest"
+        case "quay.io": return "quay.io/prometheus/node-exporter:latest"
+        case "gcr.io": return "gcr.io/google-containers/pause:3.9"
+        default: return "\(interceptedHost)/<image>:<tag>"
+        }
+    }
+
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 18) {
@@ -20,25 +40,40 @@ struct MirrorDetailView: View {
                 Divider()
                 GroupBox("Configuration") {
                     VStack(alignment: .leading, spacing: 6) {
-                        row("Listen port", "\(mirror.port)")
-                        row("Remote URL", mirror.remoteURL, mono: true)
+                        row("Remote URL", mirror.remoteURL, mono: true, valueColor: .secondary)
                         Divider().padding(.vertical, 4)
-                        row("Pull via guest",
-                            "kind-control-plane → \(mirror.name):\(mirror.port)",
-                            mono: true)
+                        row("Intercepts", interceptedHost, mono: true, valueColor: Self.hostColor,
+                            help: "Image references for this registry host are rewritten to the mirror by each kind node's containerd (via /etc/containerd/certs.d).")
+                        Text("Remote URL is read from your klimax config file.")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                            .padding(.top, 4)
+                    }
+                    .padding(8)
+                }
+                GroupBox("Usage") {
+                    VStack(alignment: .leading, spacing: 10) {
+                        (
+                            Text("Any image pulled from ")
+                            + Text(interceptedHost).foregroundColor(Self.hostColor).bold()
+                            + Text(" inside the cluster is transparently served through this mirror — no changes to your manifests.")
+                        )
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Example")
+                                .font(.caption.bold())
+                                .foregroundStyle(.secondary)
+                            Text("A pod using `\(exampleImage)` is fetched once, cached below, and served from that cache on the next pull — even from a fresh cluster — instead of hitting the internet.")
+                                .font(.callout)
+                                .foregroundStyle(.secondary)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                        }
                     }
                     .padding(8)
                 }
                 cacheCard
-                GroupBox("Usage") {
-                    VStack(alignment: .leading, spacing: 6) {
-                        Text("Pulls from \(URL(string: mirror.remoteURL)?.host ?? mirror.remoteURL) are routed through this mirror by the kind cluster's containerd config — no client-side changes required.")
-                            .font(.callout)
-                            .foregroundStyle(.secondary)
-                            .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                    .padding(8)
-                }
             }
             .padding(20)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -129,13 +164,23 @@ struct MirrorDetailView: View {
         ByteCountFormatter.string(fromByteCount: bytes, countStyle: .file)
     }
 
-    private func row(_ k: String, _ v: String, mono: Bool = false) -> some View {
+    private func row(_ k: String, _ v: String, mono: Bool = false,
+                     valueColor: Color? = nil, help: String? = nil) -> some View {
         HStack(alignment: .firstTextBaseline) {
-            Text(k)
-                .frame(width: 140, alignment: .leading)
-                .foregroundStyle(.secondary)
+            HStack(spacing: 4) {
+                Text(k)
+                    .foregroundStyle(.secondary)
+                if let help {
+                    Image(systemName: "info.circle")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .help(help)
+                }
+            }
+            .frame(width: 140, alignment: .leading)
             Text(v)
                 .font(mono ? .system(.body, design: .monospaced) : .body)
+                .foregroundStyle(valueColor ?? .primary)
                 .textSelection(.enabled)
         }
     }

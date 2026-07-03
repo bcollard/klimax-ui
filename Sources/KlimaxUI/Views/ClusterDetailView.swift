@@ -53,16 +53,11 @@ struct ClusterDetailView: View {
                         metricsTabBody
                     }
                     if !model.actionLog.isEmpty {
-                        GroupBox("Last action log") {
-                            ScrollView {
-                                Text(model.actionLog)
-                                    .font(.system(.caption, design: .monospaced))
-                                    .textSelection(.enabled)
-                                    .frame(maxWidth: .infinity, alignment: .leading)
-                                    .padding(8)
-                            }
-                            .frame(maxHeight: 180)
-                        }
+                        LogConsoleView(
+                            title: "Last action log",
+                            text: model.actionLog,
+                            maxHeight: 180
+                        )
                     }
                 }
                 .padding(20)
@@ -210,7 +205,7 @@ struct ClusterDetailView: View {
                         Text("cpu \(cpu)")
                     }
                     if let mem = n.status.capacity?.memory {
-                        Text("mem \(mem)")
+                        Text("mem \(Self.humanMemory(mem))")
                     }
                 }
                 .font(.caption)
@@ -304,6 +299,16 @@ struct ClusterDetailView: View {
         let pb = NSPasteboard.general
         pb.clearContents()
         pb.setString(s, forType: .string)
+    }
+
+    /// Format a k8s memory quantity (e.g. "16307012Ki") as a readable GiB/MiB
+    /// string. Falls back to the raw value if it can't be parsed.
+    static func humanMemory(_ raw: String) -> String {
+        guard let mib = QuantityParser.memoryMiB(raw) else { return raw }
+        if mib >= 1024 {
+            return String(format: "%.1f GiB", mib / 1024)
+        }
+        return String(format: "%.0f MiB", mib)
     }
 
     // MARK: - Bits

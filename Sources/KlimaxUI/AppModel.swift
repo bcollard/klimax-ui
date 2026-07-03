@@ -74,10 +74,14 @@ final class AppModel {
         var log: String = ""
         var running: Bool = true
         var failed: Bool = false
+        var cancelled: Bool = false
         /// klimax's own "non-default kind node version — UNSUPPORTED" warning,
         /// surfaced verbatim when it appears in the create output.
         var versionWarning: String?
     }
+
+    // The in-flight streaming create loop, so it can be cancelled mid-run.
+    private var creationTask: Task<Void, Never>?
 
     /// Name of a cluster currently being provisioned that isn't in `clusters`
     /// yet — used to render a placeholder in the sidebar and overview.
@@ -468,31 +472,54 @@ final class AppModel {
         // Surface the placeholder and its live log immediately.
         selection = .cluster(name: name)
 
-        for await event in ProcessRunner.stream(
-            KlimaxCLI.executable, ["cluster", "create", name]
-        ) {
-            switch event {
-            case .output(let text):
-                creation?.log = text
-                if creation?.versionWarning == nil,
-                   let warning = Self.detectVersionWarning(in: text) {
-                    creation?.versionWarning = warning
+        // Run the stream in a cancellable task; cancelling it tears down the
+        // AsyncStream, which terminates the underlying `klimax cluster create`.
+        let streamTask = Task { @MainActor in
+            for await event in ProcessRunner.stream(
+                KlimaxCLI.executable, ["cluster", "create", name]
+            ) {
+                switch event {
+                case .output(let text):
+                    creation?.log = text
+                    if creation?.versionWarning == nil,
+                       let warning = Self.detectVersionWarning(in: text) {
+                        creation?.versionWarning = warning
+                    }
+                case .finished(let result):
+                    creation?.failed = !result.ok
+                    actionLog = combinedLog(label: label, result: result)
                 }
-            case .finished(let result):
-                creation?.running = false
-                creation?.failed = !result.ok
-                actionLog = combinedLog(label: label, result: result)
+            }
+        }
+        creationTask = streamTask
+        await streamTask.value
+        let wasCancelled = streamTask.isCancelled
+        creationTask = nil
+
+        if wasCancelled {
+            creation?.cancelled = true
+            creation?.failed = true
+            creation?.log += "\n── Cancelled — cleaning up partial cluster ──\n"
+            if let del = try? await KlimaxCLI.deleteCluster(name: name) {
+                creation?.log += combinedLog(label: "Deleting cluster \(name)", result: del)
             }
         }
 
+        creation?.running = false
         inFlightAction = nil
         await refreshAll()
         startVMPollingIfRunning()
         // On success the real cluster is now in the list; drop the session so
-        // ClusterDetailView takes over. On failure keep it so the log stays put.
+        // ClusterDetailView takes over. On failure/cancel keep it so the log stays.
         if creation?.failed == false, clusters.contains(where: { $0.name == name }) {
             creation = nil
         }
+    }
+
+    /// Cancel the in-flight cluster creation, if any. The create process is
+    /// terminated and the partial cluster is cleaned up (see `createCluster`).
+    func cancelCreation() {
+        creationTask?.cancel()
     }
 
     /// Extract klimax's mismatch warning line, if present. klimax logs (to

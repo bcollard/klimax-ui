@@ -46,7 +46,15 @@ struct ClusterCreatingView: View {
                 }
             }
             Spacer()
-            if creation.failed {
+            if creation.running {
+                if !creation.cancelled {
+                    Button(role: .destructive) {
+                        model.cancelCreation()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                }
+            } else {
                 Button {
                     model.creation = nil
                     model.selection = nil
@@ -61,6 +69,8 @@ struct ClusterCreatingView: View {
     private var statusIcon: some View {
         if creation.running {
             ProgressView().controlSize(.small)
+        } else if creation.cancelled {
+            Image(systemName: "slash.circle.fill").foregroundStyle(.orange)
         } else if creation.failed {
             Image(systemName: "xmark.octagon.fill").foregroundStyle(.red)
         } else {
@@ -69,7 +79,8 @@ struct ClusterCreatingView: View {
     }
 
     private var statusText: String {
-        if creation.running { return "Creating kind cluster…" }
+        if creation.running { return creation.cancelled ? "Cancelling…" : "Creating kind cluster…" }
+        if creation.cancelled { return "Cancelled" }
         if creation.failed { return "Creation failed" }
         return "Created"
     }

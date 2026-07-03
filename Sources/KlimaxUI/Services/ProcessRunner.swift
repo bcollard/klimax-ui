@@ -150,6 +150,12 @@ enum ProcessRunner {
                 continuation.finish()
             }
 
+            // Terminate the child if the consumer cancels/drops the stream.
+            let box = ProcessBox(process)
+            continuation.onTermination = { _ in
+                if box.process.isRunning { box.process.terminate() }
+            }
+
             do {
                 try process.run()
             } catch {
@@ -189,6 +195,12 @@ enum ProcessRunner {
         // Fallback — will likely fail at run-time, surfaced to caller.
         return URL(fileURLWithPath: "/usr/bin/env")
     }
+}
+
+/// Lets the `@Sendable` onTermination closure hold a (non-Sendable) Process.
+private final class ProcessBox: @unchecked Sendable {
+    let process: Process
+    init(_ process: Process) { self.process = process }
 }
 
 private final class DataBox: @unchecked Sendable {

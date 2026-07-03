@@ -27,6 +27,7 @@ struct SidebarView: View {
                         ClusterRow(
                             cluster: c,
                             createdAt: model.clusterCreatedAt[c.name],
+                            fleet: model.fleet(of: c.name),
                             isCurrentContext: model.currentKubeContext == c.name
                         )
                         .tag(SidebarSelection.cluster(name: c.name))
@@ -107,6 +108,7 @@ struct SidebarView: View {
 private struct ClusterRow: View {
     let cluster: KindCluster
     let createdAt: Date?
+    var fleet: String? = nil
     var isCurrentContext: Bool = false
 
     var body: some View {
@@ -117,23 +119,32 @@ private struct ClusterRow: View {
                     if isCurrentContext {
                         Text("current")
                             .font(.caption2.weight(.medium))
-                            .foregroundStyle(.tint)
+                            .foregroundStyle(.green)
                             .padding(.horizontal, 5)
                             .padding(.vertical, 1)
-                            .background(Capsule().fill(Color.accentColor.opacity(0.18)))
+                            .background(Capsule().fill(Color.green.opacity(0.18)))
                             .help("kubectl current-context")
                     }
                 }
-                if let createdAt {
-                    TimelineView(.periodic(from: .now, by: 60)) { context in
-                        Text(RelativeAge.format(since: createdAt, now: context.date))
-                            .font(.caption2.monospacedDigit())
+                HStack(spacing: 6) {
+                    if let fleet {
+                        Label(fleet, systemImage: "square.stack.3d.up")
+                            .font(.caption2)
                             .foregroundStyle(.secondary)
+                            .labelStyle(.titleAndIcon)
+                            .help("Fleet")
                     }
-                } else {
-                    Text("—")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    if let createdAt {
+                        TimelineView(.periodic(from: .now, by: 60)) { context in
+                            Text(RelativeAge.format(since: createdAt, now: context.date))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if fleet == nil {
+                        Text("—")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
                 }
             }
         } icon: {

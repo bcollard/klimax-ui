@@ -68,6 +68,7 @@ struct KubeDeployment: Decodable, Sendable, Hashable, Identifiable {
 struct ObjectMeta: Decodable, Sendable, Hashable {
     let name: String
     let namespace: String?
+    let labels: [String: String]?
 }
 
 struct KubeService: Decodable, Sendable, Hashable, Identifiable {

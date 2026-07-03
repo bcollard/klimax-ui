@@ -41,6 +41,7 @@ struct ClusterDetailView: View {
                     case .info:
                         podsCard
                         nodesCard
+                        labelsCard
                         kubeconfigCard
                     case .services:
                         ServicesTabView(
@@ -99,6 +100,9 @@ struct ClusterDetailView: View {
                         }
                         if let createdAt = model.clusterCreatedAt[cluster.name] {
                             metaPill("age", RelativeAge.format(since: createdAt, now: context.date))
+                        }
+                        if let fleet = nodeLabels?["klimax.dev/fleet"] {
+                            metaPill("fleet", fleet)
                         }
                     }
                     .font(.callout)
@@ -190,6 +194,47 @@ struct ClusterDetailView: View {
                     }
                 }
                 .padding(.vertical, 2)
+            } else {
+                Text(detail?.loading == true ? "Loading…" : "No nodes.")
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
+                    .padding(.vertical, 4)
+            }
+        }
+    }
+
+    // MARK: - Labels
+
+    /// Node labels (same across nodes) for the loaded cluster.
+    private var nodeLabels: [String: String]? {
+        detail?.nodes.first?.metadata.labels
+    }
+
+    private var labelsCard: some View {
+        GroupBox("Node labels") {
+            if let labels = nodeLabels {
+                let shown = AppModel.displayLabels(labels)
+                if shown.isEmpty {
+                    Text("No klimax labels.")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                        .padding(.vertical, 4)
+                } else {
+                    VStack(alignment: .leading, spacing: 4) {
+                        ForEach(shown, id: \.key) { pair in
+                            HStack(alignment: .firstTextBaseline) {
+                                Text(pair.key)
+                                    .font(.caption.monospaced())
+                                    .foregroundStyle(.secondary)
+                                Spacer()
+                                Text(pair.value)
+                                    .font(.caption.monospaced())
+                                    .textSelection(.enabled)
+                            }
+                        }
+                    }
+                    .padding(4)
+                }
             } else {
                 Text(detail?.loading == true ? "Loading…" : "No nodes.")
                     .font(.callout)

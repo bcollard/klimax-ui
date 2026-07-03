@@ -6,6 +6,27 @@ import AppKit
 struct OverviewDetailView: View {
     @Bindable var model: AppModel
     @State private var showNewClusterSheet = false
+    @State private var showDeleteAllConfirm = false
+
+    private var clustersHeaderTrailing: AnyView {
+        AnyView(
+            HStack(spacing: 8) {
+                if model.clustersLoading {
+                    ProgressView().controlSize(.mini)
+                }
+                if !model.clusters.isEmpty {
+                    Button(role: .destructive) {
+                        showDeleteAllConfirm = true
+                    } label: {
+                        Label("Delete all", systemImage: "trash")
+                    }
+                    .controlSize(.small)
+                    .disabled(model.inFlightAction != nil)
+                    .help("Delete every kind cluster")
+                }
+            }
+        )
+    }
 
     var body: some View {
         ScrollView {
@@ -25,6 +46,18 @@ struct OverviewDetailView: View {
         }
         .sheet(isPresented: $showNewClusterSheet) {
             NewClusterSheet(model: model, isPresented: $showNewClusterSheet)
+        }
+        .confirmationDialog(
+            "Delete all \(model.clusters.count) clusters?",
+            isPresented: $showDeleteAllConfirm,
+            titleVisibility: .visible
+        ) {
+            Button("Delete all clusters", role: .destructive) {
+                Task { await model.deleteAllClusters() }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This tears down every kind cluster in the VM. This cannot be undone.")
         }
     }
 
@@ -84,7 +117,7 @@ struct OverviewDetailView: View {
             sectionHeader(
                 title: "Clusters",
                 count: model.clusters.count,
-                trailing: model.clustersLoading ? AnyView(ProgressView().controlSize(.mini)) : nil
+                trailing: clustersHeaderTrailing
             )
             LazyVGrid(
                 columns: [GridItem(.adaptive(minimum: 260), spacing: 12)],
@@ -92,7 +125,7 @@ struct OverviewDetailView: View {
                 spacing: 12
             ) {
                 ForEach(model.clusters) { c in
-                    ClusterCard(cluster: c) {
+                    ClusterCard(cluster: c, fleet: model.fleet(of: c.name)) {
                         model.selection = .cluster(name: c.name)
                     }
                 }
@@ -176,6 +209,7 @@ struct OverviewDetailView: View {
 
 private struct ClusterCard: View {
     let cluster: KindCluster
+    var fleet: String? = nil
     let action: () -> Void
     @State private var hovering = false
 
@@ -194,6 +228,9 @@ private struct ClusterCard: View {
                 HStack(spacing: 6) {
                     pill("num \(cluster.num)")
                     pill("api :\(cluster.apiPort)")
+                    if let fleet {
+                        pill("fleet \(fleet)")
+                    }
                 }
                 Text(cluster.kubeconfigPath)
                     .font(.caption2.monospaced())

@@ -54,9 +54,10 @@ enum KlimaxCLI {
         try await ProcessRunner.run(executable, ["cluster", "create", name])
     }
 
-    /// Delete a kind cluster by name.
+    /// Delete a kind cluster by name. `-y` skips the interactive confirmation
+    /// prompt klimax shows by default (which would otherwise hang our Process).
     static func deleteCluster(name: String) async throws -> ProcessResult {
-        try await ProcessRunner.run(executable, ["cluster", "delete", name])
+        try await ProcessRunner.run(executable, ["cluster", "delete", name, "-y"])
     }
 
     /// Return klimax version string, e.g. "klimax 0.1.25".

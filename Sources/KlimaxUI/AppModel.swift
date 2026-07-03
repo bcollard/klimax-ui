@@ -28,6 +28,30 @@ final class AppModel {
     var clusterCreatedAt: [String: Date] = [:]
     private var creationTimeTask: Task<Void, Never>?
 
+    // Node labels per cluster (read from the first node), for fleet/topology
+    // display. klimax applies managed-by, klimax.dev/fleet, and topology labels.
+    var clusterLabels: [String: [String: String]] = [:]
+    private var labelsTask: Task<Void, Never>?
+
+    /// Fleet a cluster belongs to (klimax.dev/fleet node label), if any.
+    func fleet(of clusterName: String) -> String? {
+        clusterLabels[clusterName]?["klimax.dev/fleet"]
+    }
+
+    /// klimax-relevant labels for display — drops the noisy Kubernetes system
+    /// labels (hostname/os/arch/roles), keeps fleet, topology, managed-by, and
+    /// any custom labels.
+    static func displayLabels(_ all: [String: String]) -> [(key: String, value: String)] {
+        let systemPrefixes = [
+            "kubernetes.io/", "beta.kubernetes.io/",
+            "node-role.kubernetes.io/", "node.kubernetes.io/",
+        ]
+        return all
+            .filter { key, _ in !systemPrefixes.contains(where: { key.hasPrefix($0) }) }
+            .map { (key: $0.key, value: $0.value) }
+            .sorted { $0.key < $1.key }
+    }
+
     var selection: SidebarSelection?
 
     // Per-selected-cluster details (rebuilt on selection change).
@@ -219,6 +243,7 @@ final class AppModel {
             clusters = []
             clustersError = nil
             clusterCreatedAt = [:]
+            clusterLabels = [:]
             return
         }
         clustersLoading = true
@@ -232,6 +257,7 @@ final class AppModel {
         }
         pruneCreationTimes()
         refreshCreationTimes()
+        refreshClusterLabels()
     }
 
     /// Read kubectl's current-context from the default kubeconfig. Nil when
@@ -249,6 +275,31 @@ final class AppModel {
     private func pruneCreationTimes() {
         let names = Set(clusters.map(\.name))
         clusterCreatedAt = clusterCreatedAt.filter { names.contains($0.key) }
+        clusterLabels = clusterLabels.filter { names.contains($0.key) }
+    }
+
+    /// Fetch node labels for any cluster we don't yet have cached. Labels are
+    /// effectively static per cluster, so we don't re-query resolved ones.
+    private func refreshClusterLabels() {
+        let missing = clusters.filter { clusterLabels[$0.name] == nil }
+        guard !missing.isEmpty else { return }
+        labelsTask?.cancel()
+        labelsTask = Task { [weak self] in
+            await withTaskGroup(of: (String, [String: String]?).self) { group in
+                for c in missing {
+                    let kubeconfig = c.kubeconfigPath
+                    let name = c.name
+                    group.addTask {
+                        let nodes = try? await KubeClient(kubeconfigPath: kubeconfig).listNodes()
+                        return (name, nodes?.first?.metadata.labels)
+                    }
+                }
+                for await (name, labels) in group {
+                    guard !Task.isCancelled, let labels else { continue }
+                    self?.clusterLabels[name] = labels
+                }
+            }
+        }
     }
 
     /// Fetch kube-system creation timestamps for any cluster we don't yet
@@ -563,6 +614,30 @@ final class AppModel {
         if case .cluster(let sel) = selection, sel == name {
             selection = nil
         }
+    }
+
+    /// Delete every cluster, sequentially. Kind clusters share the guest, so
+    /// serial deletion avoids racing klimax's shared kubeconfig/docker state.
+    func deleteAllClusters() async {
+        let names = clusters.map(\.name)
+        guard !names.isEmpty, inFlightAction == nil else { return }
+        inFlightAction = "Deleting all clusters"
+        actionLog = ""
+        creation = nil
+        var log = ""
+        for name in names {
+            do {
+                let result = try await KlimaxCLI.deleteCluster(name: name)
+                log += combinedLog(label: "Deleting cluster \(name)", result: result)
+            } catch {
+                log += "Deleting cluster \(name) failed: \(error.localizedDescription)\n"
+            }
+        }
+        actionLog = log
+        inFlightAction = nil
+        selection = nil
+        await refreshAll()
+        startVMPollingIfRunning()
     }
 
     /// Set kubectl's current-context (in the default kubeconfig) to this

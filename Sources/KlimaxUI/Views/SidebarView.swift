@@ -227,7 +227,11 @@ private struct VMCard: View {
                                     (
                                         Text(String(format: "%.1f", usedGiB))
                                             .foregroundColor(usageColor(ratio, warn: 0.7, crit: 0.9))
+                                        // Pin the total to secondary so it stays a constant
+                                        // dark grey instead of following the window's
+                                        // key-state (active=white / inactive=grey) dimming.
                                         + Text(String(format: " / %.1f GiB", totalGiB))
+                                            .foregroundColor(.secondary)
                                     )
                                     .font(.caption.monospacedDigit())
                                     .textSelection(.enabled)

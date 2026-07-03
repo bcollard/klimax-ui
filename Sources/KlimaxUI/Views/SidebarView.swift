@@ -91,11 +91,14 @@ struct SidebarView: View {
                 .foregroundStyle(model.currentKubeContext == nil ? .tertiary : .secondary)
                 .help("kubectl current-context")
 
-                if let version = model.klimaxVersion {
-                    Text(version)
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
+                VStack(alignment: .leading, spacing: 2) {
+                    if let cli = model.klimaxVersion {
+                        Text(cli.replacingOccurrences(of: "klimax ", with: "klimax CLI "))
+                    }
+                    Text("Klimax UI \(AppAssets.appVersion)")
                 }
+                .font(.caption)
+                .foregroundStyle(.tertiary)
             }
         }
         .listStyle(.sidebar)

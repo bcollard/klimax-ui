@@ -13,6 +13,11 @@ import Foundation
 enum AppAssets {
     static let logo: NSImage? = loadImage(named: "klimax-logo", withExtension: "png")
 
+    /// The app's marketing version (CFBundleShortVersionString), e.g. "0.1.4".
+    static var appVersion: String {
+        Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "?"
+    }
+
     private static func loadImage(named name: String, withExtension ext: String) -> NSImage? {
         // 1. swift-bundler / normal .app layout: resource sits in Contents/Resources.
         if let url = Bundle.main.url(forResource: name, withExtension: ext) {

@@ -12,6 +12,17 @@ struct RootView: View {
             detailView
         }
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    model.selection = nil
+                } label: {
+                    Label("Home", systemImage: "house")
+                }
+                .buttonStyle(.bordered)
+                .buttonBorderShape(.circle)
+                .disabled(model.selection == nil)
+                .help("Return to the overview (VM home)")
+            }
             ToolbarItem(placement: .primaryAction) {
                 Button {
                     Task { await model.refreshAll() }

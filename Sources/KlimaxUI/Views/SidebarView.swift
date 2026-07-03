@@ -146,7 +146,7 @@ private struct MirrorRow: View {
         Label {
             VStack(alignment: .leading, spacing: 1) {
                 Text(displayName)
-                Text(":\(mirror.port) → \(shortRemote)")
+                Text(mirror.remoteURL)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
                     .truncationMode(.tail)
@@ -162,10 +162,6 @@ private struct MirrorRow: View {
         mirror.name.hasPrefix("registry-")
             ? String(mirror.name.dropFirst("registry-".count))
             : mirror.name
-    }
-
-    private var shortRemote: String {
-        URL(string: mirror.remoteURL)?.host ?? mirror.remoteURL
     }
 }
 

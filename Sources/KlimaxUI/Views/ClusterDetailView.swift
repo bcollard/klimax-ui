@@ -7,6 +7,7 @@ struct ClusterDetailView: View {
     @State private var showAddLabel = false
     @State private var newLabelKey = ""
     @State private var newLabelValue = ""
+    @State private var labelError: String?
 
     enum Tab: Hashable { case info, services, metrics }
 
@@ -260,6 +261,7 @@ struct ClusterDetailView: View {
         Button {
             newLabelKey = ""
             newLabelValue = ""
+            labelError = nil
             showAddLabel = true
         } label: {
             HStack(spacing: 4) {
@@ -286,18 +288,25 @@ struct ClusterDetailView: View {
     private var addLabelForm: some View {
         VStack(alignment: .leading, spacing: 10) {
             Text("Add node label").font(.headline)
-            Text("Applied to every node with `kubectl label --overwrite`.")
+            Text("Applied to every node in the cluster.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             TextField("key (e.g. klimax.dev/fleet)", text: $newLabelKey)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit(submitLabel)
             TextField("value", text: $newLabelValue)
                 .textFieldStyle(.roundedBorder)
+                .onSubmit(submitLabel)
+            if let labelError {
+                Label(labelError, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
             HStack {
                 Spacer()
                 Button("Cancel") { showAddLabel = false }
                 Button("Add") { submitLabel() }
-                    .keyboardShortcut(.defaultAction)
                     .disabled(newLabelKey.trimmingCharacters(in: .whitespaces).isEmpty)
             }
         }
@@ -305,12 +314,51 @@ struct ClusterDetailView: View {
         .frame(width: 320)
     }
 
+    /// Validate on Enter/Add: reject invalid Kubernetes label keys/values with
+    /// inline feedback; only apply (and close) when the pair is valid.
     private func submitLabel() {
         let key = newLabelKey.trimmingCharacters(in: .whitespacesAndNewlines)
         let value = newLabelValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        if let error = Self.validateLabel(key: key, value: value) {
+            labelError = error
+            return
+        }
+        labelError = nil
         showAddLabel = false
-        guard !key.isEmpty else { return }
         Task { await model.addLabel(to: cluster, key: key, value: value) }
+    }
+
+    /// Kubernetes label validation (mirrors klimax's ValidateLabels): optional
+    /// DNS-subdomain prefix + "/" + a ≤63-char name segment; value is empty or a
+    /// ≤63-char segment. Returns a human-readable error, or nil when valid.
+    static func validateLabel(key: String, value: String) -> String? {
+        guard !key.isEmpty else { return "Key is required." }
+        let segment = "^[A-Za-z0-9]([A-Za-z0-9._-]*[A-Za-z0-9])?$"
+        let name: String
+        let slashParts = key.split(separator: "/", omittingEmptySubsequences: false)
+        switch slashParts.count {
+        case 1:
+            name = String(slashParts[0])
+        case 2:
+            let prefix = String(slashParts[0])
+            name = String(slashParts[1])
+            let dns = "^[a-z0-9]([a-z0-9.-]*[a-z0-9])?$"
+            if prefix.isEmpty || prefix.count > 253
+                || prefix.range(of: dns, options: .regularExpression) == nil {
+                return "Invalid key prefix “\(prefix)”."
+            }
+        default:
+            return "Key may contain at most one “/”."
+        }
+        if name.isEmpty || name.count > 63
+            || name.range(of: segment, options: .regularExpression) == nil {
+            return "Invalid key name “\(name)” (letters, digits, -_. ; ≤63 chars)."
+        }
+        if !value.isEmpty,
+           value.count > 63 || value.range(of: segment, options: .regularExpression) == nil {
+            return "Invalid value “\(value)” (letters, digits, -_. ; ≤63 chars)."
+        }
+        return nil
     }
 
     /// Shorten a label key to its last path segment for compact pills

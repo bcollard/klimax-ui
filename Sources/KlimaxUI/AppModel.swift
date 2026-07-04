@@ -81,6 +81,11 @@ final class AppModel {
     private var lastVMRaw: GuestRawSample?
     private static let vmPollInterval: Duration = .seconds(5)
 
+    // Background poll that detects out-of-band changes (VM started/stopped,
+    // clusters created/deleted via the CLI) and refreshes the UI to match.
+    private var statePollTask: Task<Void, Never>?
+    private static let statePollInterval: Duration = .seconds(6)
+
     // Registry mirror disk-usage measurements, keyed by mirror name.
     var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
 
@@ -154,10 +159,46 @@ final class AppModel {
 
     func bootstrap() async {
         await refreshAll()
-        if klimaxVersion == nil {
-            klimaxVersion = (try? await KlimaxCLI.version()) ?? "klimax (unknown)"
-        }
         startVMPollingIfRunning()
+        startStatePolling()
+    }
+
+    /// Poll for out-of-band changes: VM started/stopped, or clusters created/
+    /// deleted via the CLI. On a detected change, refresh just enough to match.
+    private func startStatePolling() {
+        statePollTask?.cancel()
+        statePollTask = Task { [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: AppModel.statePollInterval)
+                await self?.pollForExternalChanges()
+            }
+        }
+    }
+
+    private func pollForExternalChanges() async {
+        // Don't fight an in-flight action or an active create session — those
+        // refresh on their own when they finish.
+        guard inFlightAction == nil, creation?.running != true else { return }
+
+        let wasRunning = vm?.isRunning ?? false
+        let nowRunning = resolveSingleInstance()?.isRunning ?? false
+        if wasRunning != nowRunning {
+            await refreshAll()
+            startVMPollingIfRunning()
+            return
+        }
+        guard nowRunning else { return }
+
+        // VM steady; check whether the cluster set changed out from under us.
+        guard let latest = try? await KlimaxCLI.listClusters() else { return }
+        if Set(latest.map(\.name)) != Set(clusters.map(\.name)) {
+            await refreshClusters()
+            if case .cluster(let name) = selection,
+               !clusters.contains(where: { $0.name == name }), creation?.name != name {
+                selection = nil
+            }
+            await refreshSelection()
+        }
     }
 
     private func startVMPollingIfRunning() {
@@ -204,6 +245,9 @@ final class AppModel {
     func refreshAll() async {
         config = InstanceDiscovery.loadConfig()
         vm = resolveSingleInstance()
+        // Keep the CLI version current (it changes when the user upgrades klimax).
+        if let v = try? await KlimaxCLI.version() { klimaxVersion = v }
+        else if klimaxVersion == nil { klimaxVersion = "klimax (unknown)" }
         await refreshClusters()
         await refreshCurrentKubeContext()
         if let vm, vm.isRunning, let ssh = vm.ssh {

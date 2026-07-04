@@ -260,12 +260,6 @@ private struct MirrorCard: View {
     let action: () -> Void
     @State private var hovering = false
 
-    private var displayName: String {
-        mirror.name.hasPrefix("registry-")
-            ? String(mirror.name.dropFirst("registry-".count))
-            : mirror.name
-    }
-
     private var remoteHost: String {
         URL(string: mirror.remoteURL)?.host ?? mirror.remoteURL
     }
@@ -276,7 +270,7 @@ private struct MirrorCard: View {
                 HStack {
                     Image(systemName: "arrow.triangle.2.circlepath")
                         .foregroundStyle(.purple)
-                    Text(displayName).font(.headline)
+                    Text(mirror.name).font(.headline)
                     Spacer()
                     Image(systemName: "chevron.right")
                         .foregroundStyle(.tertiary)

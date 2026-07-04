@@ -185,7 +185,7 @@ private struct MirrorRow: View {
     var body: some View {
         Label {
             VStack(alignment: .leading, spacing: 1) {
-                Text(displayName)
+                Text(mirror.name)
                 Text(mirror.remoteURL)
                     .font(.caption2)
                     .foregroundStyle(.secondary)
@@ -195,13 +195,6 @@ private struct MirrorRow: View {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .foregroundStyle(.purple)
         }
-    }
-
-    private var displayName: String {
-        // Mirror names are like "registry-dockerio" — trim prefix for readability.
-        mirror.name.hasPrefix("registry-")
-            ? String(mirror.name.dropFirst("registry-".count))
-            : mirror.name
     }
 }
 

@@ -130,13 +130,20 @@ This is exactly the Docker registry v2 on-disk layout — no registry HTTP API c
 
 ## App model and polling
 
-`AppModel` is a `@MainActor @Observable` class holding every piece of state the views read. Polling is structured around three tasks held as properties:
+`AppModel` is a `@MainActor @Observable` class holding every piece of state the views read. Polling is structured around four tasks held as properties:
 
 - `vmPollTask` — 5 s loop driving `collectVMSample()` (`GuestSSH.rawSample()` → CPU%/mem). Started by `startVMPollingIfRunning()` when the VM is up.
 - `metricsTask` — 15 s loop scoped to the selected cluster; fetches node + pod metrics and appends to the per-cluster `MetricsHistory` ring buffer (capacity 60 = 15 minutes).
 - `probeTask` — one-shot `TaskGroup` triggered on cluster selection or service refresh.
+- `statePollTask` — 6 s loop (`pollForExternalChanges()`) that detects out-of-band changes: VM started/stopped, or clusters created/deleted via the CLI. On a change it calls `refreshAll()`/`refreshClusters()` so the UI stays live without a manual ⌘R. Skips while `inFlightAction`/a running `creation` would refresh anyway.
 
-`AppModel.refreshAll()` reloads VM state, clusters, mirrors, and config in parallel via `async let`. `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
+`AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the klimax CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
+
+### Cluster labels, fleet, and kube-context
+
+- **Node labels aren't in `klimax cluster list`** — read them from `kubectl` node metadata (`KubeNode.metadata.labels`), cached per cluster in `AppModel.clusterLabels`. klimax applies `managed-by`, `klimax.dev/fleet`, `topology.kubernetes.io/{region,zone}`, `ingress-ready` (the last is set by the klimax CLI's kind config, not the UI). `AppModel.displayLabels(_:)` filters out k8s system labels.
+- **Adding a label post-creation** uses `klimax cluster label <name> -l key=value` (KlimaxCLI.labelCluster) — **requires klimax 0.1.35+**.
+- **kube-context names == cluster name** (klimax merges each cluster into `~/.kube/config` under a context named after the cluster, not `kind-<name>`), so `currentKubeContext == cluster.name` and `use-context <name>` both work directly.
 
 Selection state lives in `AppModel.selection: SidebarSelection?` and drives both the sidebar list selection and `RootView`'s detail dispatch.
 

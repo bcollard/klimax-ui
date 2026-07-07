@@ -17,6 +17,10 @@ Klimax UI rolls all of that into one native SwiftUI app:
 - **Per-cluster view** — node + pod inventory, helm-installable `metrics-server`, live CPU/memory time series, top pods by CPU and memory.
 - **LoadBalancer service browser** — lists every `Service` with externalIPs, probes each `(ip, port)` over TCP, and renders a clickable link when reachable.
 - **Registry mirror inspector** — cache disk usage and image count for each mirror in `~/.klimax/registry-cache/`.
+- **Cluster creation, live** — create a cluster and watch its `kind` log stream in-app (with a cancel button); a "delete all" action tears the whole set down.
+- **Labels & fleets** — shows each cluster's node labels (fleet, region/zone, …), badges its fleet, and can add a label to a running cluster (`klimax cluster label`, needs klimax 0.1.35+).
+- **kubectl context** — badges the active cluster and switches `current-context` from the cluster view.
+- **Stays live** — auto-refreshes when the VM starts/stops or clusters are created/deleted out-of-band (e.g. via the CLI).
 - **Single-VM model** — klimax only ever runs one VM, so the sidebar surfaces that one VM at the top and the rest of the workspace beneath it.
 
 ## Install

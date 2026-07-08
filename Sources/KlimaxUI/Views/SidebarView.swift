@@ -243,6 +243,7 @@ private struct VMCard: View {
                                 let parts = loadAvg.split(separator: " ")
                                 let load = parts.prefix(3).joined(separator: " ")
                                 metaRow("Load", load, valueColor: loadColor(parts.first))
+                                    .help(loadHelp(parts))
                             }
                             if let total = model.guestStats?.memTotalKB,
                                let avail = model.guestStats?.memAvailableKB
@@ -279,7 +280,9 @@ private struct VMCard: View {
                 .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .help("Show overview")
+            // No card-wide .help here: it would override the per-row tooltips
+            // (e.g. the Load breakdown). The home affordance is covered by the
+            // toolbar Home button and clicking the card.
 
             HStack(spacing: 6) {
                 if let label = model.inFlightAction {
@@ -344,6 +347,19 @@ private struct VMCard: View {
         if ratio >= crit { return .red }
         if ratio >= warn { return .orange }
         return .green
+    }
+
+    /// Tooltip breaking the load average into its 1/5/15-minute components,
+    /// with the per-core ratio for the 1-minute figure (which drives the color).
+    private func loadHelp(_ parts: [Substring]) -> String {
+        let labels = ["1 min", "5 min", "15 min"]
+        var lines = zip(labels, parts).map { "\($0): \($1)" }
+        if let first = parts.first, let load = Double(first),
+           let cores = model.vm?.lima?.cpus, cores > 0 {
+            lines.append("")
+            lines.append(String(format: "%.0f%% of %d cores (1 min)", load / Double(cores) * 100, cores))
+        }
+        return "Load average\n" + lines.joined(separator: "\n")
     }
 
     /// Color the 1-minute load average relative to the VM's core count

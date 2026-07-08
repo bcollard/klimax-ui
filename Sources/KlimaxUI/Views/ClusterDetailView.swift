@@ -97,6 +97,9 @@ struct ClusterDetailView: View {
                 Text(cluster.name).font(.largeTitle.bold())
                 TimelineView(.periodic(from: .now, by: 60)) { context in
                     HStack(spacing: 12) {
+                        if let fleet = nodeLabels?[Self.fleetLabelKey] {
+                            fleetBadge(fleet)
+                        }
                         if let v = detail?.serverVersion {
                             metaPill("k8s", v)
                         }
@@ -220,16 +223,14 @@ struct ClusterDetailView: View {
     private var labelsRow: some View {
         FlowLayout(spacing: 6) {
             if let labels = nodeLabels {
-                // region/zone are promoted to the meta line next to k8s.
+                // fleet + region/zone are promoted to the meta line above.
                 let rest = AppModel.displayLabels(labels).filter {
-                    $0.key != Self.regionLabelKey && $0.key != Self.zoneLabelKey
+                    $0.key != Self.regionLabelKey
+                        && $0.key != Self.zoneLabelKey
+                        && $0.key != Self.fleetLabelKey
                 }
                 ForEach(rest, id: \.key) { pair in
-                    if pair.key == Self.fleetLabelKey {
-                        fleetBadge(pair.value)
-                    } else {
-                        metaPill(Self.shortLabelKey(pair.key), pair.value)
-                    }
+                    metaPill(Self.shortLabelKey(pair.key), pair.value)
                 }
             }
             addLabelButton
@@ -245,6 +246,7 @@ struct ClusterDetailView: View {
     private func fleetBadge(_ value: String) -> some View {
         HStack(spacing: 4) {
             Image(systemName: "square.stack.3d.up.fill")
+            Text("fleet").foregroundStyle(.white.opacity(0.75))
             Text(value).bold()
         }
         .font(.caption)

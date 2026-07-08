@@ -240,10 +240,17 @@ private struct VMCard: View {
                             metaRow("Memory", vm.lima?.memory ?? "—")
                             metaRow("Disk", vm.lima?.disk ?? "—")
                             if let loadAvg = model.guestStats?.loadAvg {
-                                let parts = loadAvg.split(separator: " ")
-                                let load = parts.prefix(3).joined(separator: " ")
-                                metaRow("Load", load, valueColor: loadColor(parts.first))
-                                    .help(loadHelp(parts))
+                                let parts = Array(loadAvg.split(separator: " ").prefix(3))
+                                HStack {
+                                    Text("Load")
+                                        .foregroundStyle(.secondary)
+                                        .font(.caption)
+                                    Spacer()
+                                    loadText(parts)
+                                        .font(.caption.monospacedDigit())
+                                        .textSelection(.enabled)
+                                }
+                                .help(loadHelp(parts))
                             }
                             if let total = model.guestStats?.memTotalKB,
                                let avail = model.guestStats?.memAvailableKB
@@ -362,13 +369,22 @@ private struct VMCard: View {
         return "Load average\n" + lines.joined(separator: "\n")
     }
 
-    /// Color the 1-minute load average relative to the VM's core count
-    /// (load == cores means fully saturated). Nil when we can't compute a ratio.
-    private func loadColor(_ oneMinuteField: Substring?) -> Color? {
-        guard let oneMinuteField, let load = Double(oneMinuteField),
-              let cores = model.vm?.lima?.cpus, cores > 0
-        else { return nil }
-        return usageColor(load / Double(cores), warn: 0.7, crit: 1.0)
+    /// Color one load figure by its own load-per-core ratio: green <70%,
+    /// orange 70–90%, red ≥90%. Default color when cores are unknown.
+    private func loadFieldColor(_ field: Substring) -> Color {
+        guard let load = Double(field), let cores = model.vm?.lima?.cpus, cores > 0
+        else { return .primary }
+        return usageColor(load / Double(cores), warn: 0.7, crit: 0.9)
+    }
+
+    /// The 1/5/15-minute load figures as one Text, each colored independently.
+    private func loadText(_ parts: [Substring]) -> Text {
+        var result = Text("")
+        for (i, field) in parts.enumerated() {
+            if i > 0 { result = result + Text(" ") }
+            result = result + Text(String(field)).foregroundColor(loadFieldColor(field))
+        }
+        return result
     }
 }
 

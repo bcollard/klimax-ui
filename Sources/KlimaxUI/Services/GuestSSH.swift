@@ -53,19 +53,23 @@ struct GuestSSH: Sendable {
     /// graphing. One SSH round-trip; rides the existing ControlMaster socket.
     func rawSample() async -> GuestRawSample? {
         guard let out = try? await run(
-            "head -1 /proc/stat; echo '---'; head -3 /proc/meminfo"
+            "head -1 /proc/stat; echo '---'; head -3 /proc/meminfo; echo '---'; cat /proc/loadavg"
         ) else { return nil }
         let parts = out.components(separatedBy: "---")
-        guard parts.count == 2 else { return nil }
+        guard parts.count >= 2 else { return nil }
         guard let (total, idle) = parseProcStat(parts[0]) else { return nil }
         let (totalKB, availKB) = parseMemInfo(parts[1])
         guard let totalKB, let availKB else { return nil }
+        let loadAvg = parts.count >= 3
+            ? parts[2].trimmingCharacters(in: .whitespacesAndNewlines)
+            : nil
         return GuestRawSample(
             timestamp: Date(),
             cpuTotalTicks: total,
             cpuIdleTicks: idle,
             memTotalKB: totalKB,
-            memAvailableKB: availKB
+            memAvailableKB: availKB,
+            loadAvg: (loadAvg?.isEmpty ?? true) ? nil : loadAvg
         )
     }
 

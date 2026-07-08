@@ -36,4 +36,6 @@ struct GuestRawSample: Sendable {
     let cpuIdleTicks: UInt64
     let memTotalKB: Int
     let memAvailableKB: Int
+    /// Raw `/proc/loadavg` line, so the 5 s poll can also drive the Load row.
+    let loadAvg: String?
 }

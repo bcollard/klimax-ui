@@ -239,6 +239,17 @@ final class AppModel {
             memUsedMiB: usedMiB,
             memTotalMiB: totalMiB
         ))
+
+        // Keep the sidebar's Load and Used rows live off the same 5 s sample
+        // (they read guestStats, which otherwise only refreshes on refreshAll).
+        // uptime/kernel change rarely and stay from the last full stats() call.
+        guestStats = GuestSSH.GuestStats(
+            uptime: guestStats?.uptime,
+            loadAvg: raw.loadAvg ?? guestStats?.loadAvg,
+            memTotalKB: raw.memTotalKB,
+            memAvailableKB: raw.memAvailableKB,
+            kernel: guestStats?.kernel
+        )
     }
 
     /// Reload VM, config, clusters, guest probes; refresh selected-cluster detail if any.

@@ -25,14 +25,8 @@ struct KlimaxConfig: Sendable, Hashable, Decodable {
     }
 
     struct Registries: Sendable, Hashable, Decodable {
-        let localRegistry: LocalRegistry?
         let mirrors: [Mirror]?
         let cacheStorage: String?
-
-        struct LocalRegistry: Sendable, Hashable, Decodable {
-            let enabled: Bool?
-            let port: Int?
-        }
 
         struct Mirror: Sendable, Hashable, Decodable {
             let name: String

@@ -5,6 +5,7 @@ import AppKit
 /// listing clusters and registry mirrors, both clickable to drill into details.
 struct OverviewDetailView: View {
     @Bindable var model: AppModel
+    @Environment(AppSettings.self) private var settings
     @State private var showNewClusterSheet = false
     @State private var showDeleteAllConfirm = false
 
@@ -33,12 +34,14 @@ struct OverviewDetailView: View {
             VStack(alignment: .leading, spacing: 24) {
                 hero
                 clustersSection
-                mirrorsSection
-                if model.vm?.isRunning == true {
+                if settings.showMirrors {
+                    mirrorsSection
+                }
+                if settings.showVMStats, model.vm?.isRunning == true {
                     VMChartsView(model: model)
                 }
-                if !model.actionLog.isEmpty {
-                    actionLogCard
+                if let rec = model.latestLog(forAny: [.vm, .general]) {
+                    LogConsoleView(title: "Last action", text: rec.text, maxHeight: 200)
                 }
             }
             .padding(24)
@@ -168,12 +171,6 @@ struct OverviewDetailView: View {
                 }
             }
         }
-    }
-
-    // MARK: - Action log
-
-    private var actionLogCard: some View {
-        LogConsoleView(title: "Last action", text: model.actionLog, maxHeight: 200)
     }
 
     // MARK: - Bits

@@ -1,7 +1,8 @@
 import SwiftUI
 
 struct RootView: View {
-    @State private var model = AppModel()
+    let model: AppModel
+    @Environment(AppSettings.self) private var settings
     @State private var columnVisibility: NavigationSplitViewVisibility = .all
 
     var body: some View {
@@ -9,7 +10,13 @@ struct RootView: View {
             SidebarView(model: model)
                 .navigationSplitViewColumnWidth(min: 240, ideal: 280, max: 360)
         } detail: {
-            detailView
+            VStack(spacing: 0) {
+                detailView
+                if settings.showConsoleLog {
+                    Divider()
+                    ConsoleLogView(model: model)
+                }
+            }
         }
         .toolbar {
             ToolbarItem(placement: .navigation) {
@@ -39,6 +46,10 @@ struct RootView: View {
         }
         .onChange(of: model.selection) { _, _ in
             Task { await model.refreshSelection() }
+        }
+        // Start or stop VM SSH polling when the user toggles VM stats visibility.
+        .onChange(of: settings.showVMStats) { _, _ in
+            model.startVMPollingIfRunning()
         }
     }
 

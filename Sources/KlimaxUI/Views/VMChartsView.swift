@@ -5,8 +5,12 @@ import Charts
 /// (see AppModel.startVMPollingIfRunning).
 struct VMChartsView: View {
     @Bindable var model: AppModel
+    @Environment(AppSettings.self) private var settings
     /// Hover state shared by both charts so the rule + tooltip stay in sync.
     @State private var hoverTime: Date?
+
+    /// Poll cadence in whole seconds, for the resolution / window labels.
+    private var stepSeconds: Int { max(1, Int(settings.vmPollSeconds)) }
 
     private var samples: [VMSample] { model.vmHistory.samples }
     private var hoveredSample: VMSample? {
@@ -19,7 +23,7 @@ struct VMChartsView: View {
             VStack(alignment: .leading, spacing: 14) {
                 header
                 if samples.count < 2 {
-                    Text("Waiting for the first interval… (poll every 5s)")
+                    Text("Waiting for the first interval… (poll every \(stepSeconds)s)")
                         .foregroundStyle(.secondary)
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -38,7 +42,7 @@ struct VMChartsView: View {
         HStack(alignment: .firstTextBaseline) {
             Text("VM resources")
                 .font(.headline)
-            Text("5s resolution · last \(model.vmHistory.capacity * 5 / 60) min")
+            Text("\(stepSeconds)s resolution · last \(model.vmHistory.capacity * stepSeconds / 60) min")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()

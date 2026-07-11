@@ -3,9 +3,13 @@ import Charts
 
 struct MetricsChartsView: View {
     @Bindable var model: AppModel
+    @Environment(AppSettings.self) private var settings
     let cluster: KindCluster
     /// Hover state shared by both charts so the rule + tooltip stay in sync.
     @State private var hoverTime: Date?
+
+    /// Poll cadence in whole seconds, for the resolution / window labels.
+    private var stepSeconds: Int { max(1, Int(settings.metricsPollSeconds)) }
     /// Pod id ("namespace/name") hovered in the Top pods table — overlays the
     /// pod's history on both charts when set.
     @State private var hoveredPodID: String?
@@ -54,7 +58,7 @@ struct MetricsChartsView: View {
                         .font(.callout)
                 }
                 if history.samples.isEmpty {
-                    Text("Waiting for the first sample… (poll every 15s)")
+                    Text("Waiting for the first sample… (poll every \(stepSeconds)s)")
                         .foregroundStyle(.secondary)
                         .font(.callout)
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -79,7 +83,7 @@ struct MetricsChartsView: View {
         HStack(alignment: .firstTextBaseline) {
             Text("Live metrics")
                 .font(.headline)
-            Text("metrics-server · 15s resolution · last \(history.capacity * 15 / 60) min")
+            Text("metrics-server · \(stepSeconds)s resolution · last \(history.capacity * stepSeconds / 60) min")
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()

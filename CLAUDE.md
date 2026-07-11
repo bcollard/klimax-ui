@@ -41,6 +41,8 @@ klimax-ui/
 │   │   ├── KubeTypes.swift             # KubeNode/Pod/Deployment/Service decodables
 │   │   ├── Metrics.swift               # cluster metric samples + ring-buffer history
 │   │   ├── VMMetrics.swift             # VM sample + history (raw /proc/stat ticks for CPU%)
+│   │   ├── AppSettings.swift           # @Observable prefs (visibility + poll cadences), UserDefaults-backed
+│   │   ├── LogRecord.swift             # LogScope enum + LogRecord for scoped action logs
 │   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | nil
 │   ├── Services/
 │   │   ├── InstanceDiscovery.swift     # scans ~/.klimax/, reads vz.pid liveness, lima.yaml
@@ -64,6 +66,9 @@ klimax-ui/
 │   │   ├── MirrorDetailView.swift      # mirror config + cache storage + usage hint
 │   │   ├── MetricsChartsView.swift     # cluster CPU/mem charts + top pods table
 │   │   ├── VMChartsView.swift          # VM CPU%/mem charts (Swift Charts + hover tooltips)
+│   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility + Refresh tabs
+│   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
+│   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
 │   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
 │   └── Resources/
 │       └── klimax-logo.png             # used both for in-app branding and AppIcon (via swift-bundler)
@@ -92,7 +97,7 @@ We **bypass the klimax CLI for state-reads** wherever possible — every CLI inv
 - **CPU%** — `1 − idleΔ/totalΔ`, where `idle` is `(idle + iowait)` ticks. Requires a stored previous sample (`GuestRawSample`) to take the delta.
 - **Memory** — `MemTotal − MemAvailable` for used, `MemTotal` for total.
 
-Poll cadence: 5 s (`AppModel.vmPollInterval`).
+Poll cadence: user-configurable, default 5 s (`AppSettings.vmPollSeconds`; read live off `settings.vmPollInterval` at the top of each loop). Skipped entirely when the "VM stats & graphs" preference is off.
 
 ### Kubernetes — `kubectl` shell-out
 
@@ -108,7 +113,7 @@ We shell to `kubectl --kubeconfig <path>` rather than embedding a Swift Kubernet
 - `123m` → 123 millicores
 - `1.5Gi`, `512Mi`, `1024Ki` → MiB
 
-Cluster metric poll cadence: 15 s (`AppModel.pollInterval`).
+Cluster metric poll cadence: user-configurable, default 15 s (`AppSettings.metricsPollSeconds`).
 
 ### LoadBalancer reachability — `NWConnection`
 
@@ -130,12 +135,17 @@ This is exactly the Docker registry v2 on-disk layout — no registry HTTP API c
 
 ## App model and polling
 
-`AppModel` is a `@MainActor @Observable` class holding every piece of state the views read. Polling is structured around four tasks held as properties:
+`AppModel` is a `@MainActor @Observable` class holding every piece of state the views read. It is constructed with an `AppSettings` (`AppModel(settings:)`) and reads the poll cadences off it on **each loop iteration**, so changing an interval in the Settings window takes effect on the next cycle without restarting any task. Polling is structured around four tasks held as properties:
 
-- `vmPollTask` — 5 s loop driving `collectVMSample()` (`GuestSSH.rawSample()` → CPU%/mem). Started by `startVMPollingIfRunning()` when the VM is up.
-- `metricsTask` — 15 s loop scoped to the selected cluster; fetches node + pod metrics and appends to the per-cluster `MetricsHistory` ring buffer (capacity 60 = 15 minutes).
+- `vmPollTask` — `settings.vmPollInterval` loop (default 5 s) driving `collectVMSample()` (`GuestSSH.rawSample()` → CPU%/mem). Started by `startVMPollingIfRunning()` when the VM is up **and** the "VM stats & graphs" preference is on; toggling that preference (via a `RootView` `.onChange`) starts/stops it.
+- `metricsTask` — `settings.metricsPollInterval` loop (default 15 s) scoped to the selected cluster; fetches node + pod metrics and appends to the per-cluster `MetricsHistory` ring buffer (capacity 60).
 - `probeTask` — one-shot `TaskGroup` triggered on cluster selection or service refresh.
-- `statePollTask` — 6 s loop (`pollForExternalChanges()`) that detects out-of-band changes: VM started/stopped, or clusters created/deleted via the CLI. On a change it calls `refreshAll()`/`refreshClusters()` so the UI stays live without a manual ⌘R. Skips while `inFlightAction`/a running `creation` would refresh anyway.
+- `statePollTask` — `settings.clusterRefreshInterval` loop (default 6 s, `pollForExternalChanges()`) that detects out-of-band changes: VM started/stopped, or clusters created/deleted via the CLI. On a change it calls `refreshAll()`/`refreshClusters()` so the UI stays live without a manual ⌘R. Skips while `inFlightAction`/a running `creation` would refresh anyway.
+
+### Settings and scoped action logs
+
+- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView() }` scene binds it to ⌘, and the standard "Settings…" menu item.
+- **Action logs are scoped** (`LogScope`: `.vm` / `.cluster(name)` / `.metrics(name)` / `.general`). Every completed action appends a `LogRecord` via `appendLog(scope:label:text:)`; each view surfaces only its relevant entry via `model.latestLog(for:)` / `latestLog(forAny:)` — the cluster Info/Services tabs show `.cluster`, the Metrics tab shows `.metrics`, the overview shows `.vm`/`.general`. The optional bottom **`ConsoleLogView`** (toggled by `showConsoleLog`, collapsible) shows the full timestamped `consoleTranscript` across all scopes.
 
 `AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the klimax CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
 

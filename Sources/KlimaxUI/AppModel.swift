@@ -4,6 +4,15 @@ import Observation
 @MainActor
 @Observable
 final class AppModel {
+    /// User preferences (visibility toggles + poll cadences). The poll loops
+    /// read the cadence off this on every iteration, so changes take effect on
+    /// the next cycle without restarting anything.
+    let settings: AppSettings
+
+    init(settings: AppSettings) {
+        self.settings = settings
+    }
+
     // The single klimax VM. Klimax is designed around exactly one instance at a time.
     var vm: Instance?
     var config: KlimaxConfig?
@@ -64,7 +73,6 @@ final class AppModel {
     var podHistory: [String: [String: PodMetricsHistory]] = [:]
     var metricsError: [String: String] = [:]
     private var metricsTask: Task<Void, Never>?
-    private static let pollInterval: Duration = .seconds(15)
 
     // TCP probe results: cluster.name -> "ip:port" -> result.
     var serviceProbes: [String: [String: ProbeResult]] = [:]
@@ -79,12 +87,10 @@ final class AppModel {
     var vmHistory = VMHistory()
     private var vmPollTask: Task<Void, Never>?
     private var lastVMRaw: GuestRawSample?
-    private static let vmPollInterval: Duration = .seconds(5)
 
     // Background poll that detects out-of-band changes (VM started/stopped,
     // clusters created/deleted via the CLI) and refreshes the UI to match.
     private var statePollTask: Task<Void, Never>?
-    private static let statePollInterval: Duration = .seconds(6)
 
     // Registry mirror disk-usage measurements, keyed by mirror name.
     var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
@@ -97,7 +103,45 @@ final class AppModel {
     }
 
     var inFlightAction: String?
-    var actionLog: String = ""
+
+    // Completed-action logs, scoped so each view shows only what's relevant to
+    // it, plus an aggregated console transcript. Newest entry is last.
+    private(set) var logRecords: [LogRecord] = []
+    private static let maxLogRecords = 200
+
+    /// Append a completed action's log under a scope, capping history.
+    private func appendLog(scope: LogScope, label: String, text: String) {
+        logRecords.append(LogRecord(date: Date(), scope: scope, label: label, text: text))
+        if logRecords.count > Self.maxLogRecords {
+            logRecords.removeFirst(logRecords.count - Self.maxLogRecords)
+        }
+    }
+
+    /// Most recent log entry for a scope (drives a view's "Last action" card).
+    func latestLog(for scope: LogScope) -> LogRecord? {
+        logRecords.last { $0.scope == scope }
+    }
+
+    /// Most recent log entry matching any of the given scopes.
+    func latestLog(forAny scopes: [LogScope]) -> LogRecord? {
+        logRecords.last { scopes.contains($0.scope) }
+    }
+
+    /// All records rendered as one timestamped transcript (oldest first) for
+    /// the aggregated console panel.
+    var consoleTranscript: String {
+        logRecords.map { rec in
+            "[\(Self.logTime.string(from: rec.date))] \(rec.label)\n\(rec.text)"
+        }.joined(separator: "\n")
+    }
+
+    func clearLog() { logRecords.removeAll() }
+
+    private static let logTime: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f
+    }()
 
     // Live `klimax cluster create` session. Present from the moment the user
     // confirms creation until they navigate away (or it's superseded). Drives
@@ -169,7 +213,8 @@ final class AppModel {
         statePollTask?.cancel()
         statePollTask = Task { [weak self] in
             while !Task.isCancelled {
-                try? await Task.sleep(for: AppModel.statePollInterval)
+                guard let interval = self?.settings.clusterRefreshInterval else { return }
+                try? await Task.sleep(for: interval)
                 await self?.pollForExternalChanges()
             }
         }
@@ -201,15 +246,19 @@ final class AppModel {
         }
     }
 
-    private func startVMPollingIfRunning() {
+    func startVMPollingIfRunning() {
         vmPollTask?.cancel()
         vmPollTask = nil
+        // Honor the "Show VM stats & graphs" preference — when off we skip the
+        // SSH polling entirely (the sidebar rows and charts are hidden too).
+        guard settings.showVMStats else { return }
         guard let vm, vm.isRunning, let ssh = vm.ssh else { return }
         let guest = GuestSSH(endpoint: ssh)
         vmPollTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.collectVMSample(guest: guest)
-                try? await Task.sleep(for: AppModel.vmPollInterval)
+                guard let interval = self?.settings.vmPollInterval else { return }
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -413,7 +462,8 @@ final class AppModel {
         metricsTask = Task { [weak self] in
             while !Task.isCancelled {
                 await self?.pollMetrics(client: client, clusterName: name)
-                try? await Task.sleep(for: AppModel.pollInterval)
+                guard let interval = self?.settings.metricsPollInterval else { return }
+                try? await Task.sleep(for: interval)
             }
         }
     }
@@ -581,18 +631,17 @@ final class AppModel {
     // MARK: - Actions
 
     func startVM() async {
-        await runAction("Starting VM") { try await KlimaxCLI.up() }
+        await runAction("Starting VM", scope: .vm) { try await KlimaxCLI.up() }
     }
 
     func stopVM() async {
-        await runAction("Stopping VM") { try await KlimaxCLI.down() }
+        await runAction("Stopping VM", scope: .vm) { try await KlimaxCLI.down() }
     }
 
     func createCluster(named name: String) async {
         guard inFlightAction == nil, creation?.running != true else { return }
         let label = "Creating cluster \(name)"
         inFlightAction = label
-        actionLog = ""
         creation = Creation(name: name)
         // Surface the placeholder and its live log immediately.
         selection = .cluster(name: name)
@@ -612,7 +661,11 @@ final class AppModel {
                     }
                 case .finished(let result):
                     creation?.failed = !result.ok
-                    actionLog = combinedLog(label: label, result: result)
+                    self.appendLog(
+                        scope: .cluster(name),
+                        label: label,
+                        text: self.combinedLog(label: label, result: result)
+                    )
                 }
             }
         }
@@ -663,7 +716,7 @@ final class AppModel {
     }
 
     func deleteCluster(named name: String) async {
-        await runAction("Deleting cluster \(name)") {
+        await runAction("Deleting cluster \(name)", scope: .cluster(name)) {
             try await KlimaxCLI.deleteCluster(name: name)
         }
         if case .cluster(let sel) = selection, sel == name {
@@ -677,7 +730,6 @@ final class AppModel {
         let names = clusters.map(\.name)
         guard !names.isEmpty, inFlightAction == nil else { return }
         inFlightAction = "Deleting all clusters"
-        actionLog = ""
         creation = nil
         var log = ""
         for name in names {
@@ -688,7 +740,7 @@ final class AppModel {
                 log += "Deleting cluster \(name) failed: \(error.localizedDescription)\n"
             }
         }
-        actionLog = log
+        appendLog(scope: .general, label: "Deleting all clusters", text: log)
         inFlightAction = nil
         selection = nil
         await refreshAll()
@@ -699,7 +751,7 @@ final class AppModel {
     /// its cached labels and reloaded detail so the new label shows immediately.
     func addLabel(to cluster: KindCluster, key: String, value: String) async {
         clusterLabels[cluster.name] = nil  // invalidate so refreshAll refetches
-        await runAction("Label \(cluster.name): \(key)=\(value)") {
+        await runAction("Label \(cluster.name): \(key)=\(value)", scope: .cluster(cluster.name)) {
             try await KlimaxCLI.labelCluster(name: cluster.name, key: key, value: value)
         }
     }
@@ -708,34 +760,35 @@ final class AppModel {
     /// cluster. klimax merges each cluster into ~/.kube/config under a context
     /// named after the cluster, so `use-context <name>` targets it directly.
     func useContext(for cluster: KindCluster) async {
-        await runAction("Switching kubectl context to \(cluster.name)") {
+        await runAction("Switching kubectl context to \(cluster.name)", scope: .cluster(cluster.name)) {
             try await ProcessRunner.run("kubectl", ["config", "use-context", cluster.name])
         }
     }
 
     func installMetricsServer(for cluster: KindCluster) async {
-        await runAction("Installing metrics-server on \(cluster.name)") {
+        await runAction("Installing metrics-server on \(cluster.name)", scope: .metrics(cluster.name)) {
             try await Helm(kubeconfigPath: cluster.kubeconfigPath).installMetricsServer()
         }
     }
 
     func uninstallMetricsServer(for cluster: KindCluster) async {
-        await runAction("Uninstalling metrics-server on \(cluster.name)") {
+        await runAction("Uninstalling metrics-server on \(cluster.name)", scope: .metrics(cluster.name)) {
             try await Helm(kubeconfigPath: cluster.kubeconfigPath).uninstallMetricsServer()
         }
     }
 
-    private func runAction(_ label: String, _ work: () async throws -> ProcessResult) async {
+    private func runAction(_ label: String, scope: LogScope, _ work: () async throws -> ProcessResult) async {
         inFlightAction = label
-        actionLog = ""
         creation = nil  // a new action supersedes any finished create session
         defer { inFlightAction = nil }
+        let text: String
         do {
             let result = try await work()
-            actionLog = combinedLog(label: label, result: result)
+            text = combinedLog(label: label, result: result)
         } catch {
-            actionLog = "\(label) failed: \(error.localizedDescription)"
+            text = "\(label) failed: \(error.localizedDescription)"
         }
+        appendLog(scope: scope, label: label, text: text)
         await refreshAll()
         startVMPollingIfRunning()
     }

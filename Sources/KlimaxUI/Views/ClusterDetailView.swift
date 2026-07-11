@@ -18,6 +18,12 @@ struct ClusterDetailView: View {
         return nil
     }
 
+    /// Which action log this view surfaces: the Metrics tab shows metrics-server
+    /// ops, the other tabs show the cluster's lifecycle actions.
+    private var logScope: LogScope {
+        tab == .metrics ? .metrics(cluster.name) : .cluster(cluster.name)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             VStack(alignment: .leading, spacing: 12) {
@@ -57,10 +63,10 @@ struct ClusterDetailView: View {
                     case .metrics:
                         metricsTabBody
                     }
-                    if !model.actionLog.isEmpty {
+                    if let rec = model.latestLog(for: logScope) {
                         LogConsoleView(
                             title: "Last action log",
-                            text: model.actionLog,
+                            text: rec.text,
                             maxHeight: 180
                         )
                     }

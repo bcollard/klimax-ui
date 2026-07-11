@@ -2,8 +2,10 @@ import SwiftUI
 
 struct SidebarView: View {
     @Bindable var model: AppModel
+    @Environment(AppSettings.self) private var settings
     @State private var showNewClusterSheet = false
     @State private var newClusterName = ""
+    @State private var mirrorsExpanded = true
 
     var body: some View {
         List(selection: $model.selection) {
@@ -62,22 +64,24 @@ struct SidebarView: View {
                 .padding(.bottom, 6)
             }
 
-            Section {
-                if model.mirrors.isEmpty {
-                    Text("No mirrors configured.")
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(model.mirrors, id: \.name) { m in
-                        MirrorRow(mirror: m)
-                            .tag(SidebarSelection.mirror(name: m.name))
+            if settings.showMirrors {
+                Section(isExpanded: $mirrorsExpanded) {
+                    if model.mirrors.isEmpty {
+                        Text("No mirrors configured.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.mirrors, id: \.name) { m in
+                            MirrorRow(mirror: m)
+                                .tag(SidebarSelection.mirror(name: m.name))
+                        }
                     }
+                } header: {
+                    Text("Registry mirrors")
+                        .font(.headline)
+                        .textCase(nil)
+                        .padding(.bottom, 6)
                 }
-            } header: {
-                Text("Registry mirrors")
-                    .font(.headline)
-                    .textCase(nil)
-                    .padding(.bottom, 6)
             }
 
             Section {
@@ -200,6 +204,7 @@ private struct MirrorRow: View {
 
 private struct VMCard: View {
     @Bindable var model: AppModel
+    @Environment(AppSettings.self) private var settings
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -239,7 +244,7 @@ private struct VMCard: View {
                             metaRow("CPUs", vm.lima?.cpus.map(String.init) ?? "—")
                             metaRow("Memory", vm.lima?.memory ?? "—")
                             metaRow("Disk", vm.lima?.disk ?? "—")
-                            if let loadAvg = model.guestStats?.loadAvg {
+                            if settings.showVMStats, let loadAvg = model.guestStats?.loadAvg {
                                 let parts = Array(loadAvg.split(separator: " ").prefix(3))
                                 HStack {
                                     Text("Load")
@@ -252,7 +257,8 @@ private struct VMCard: View {
                                 }
                                 .help(loadHelp(parts))
                             }
-                            if let total = model.guestStats?.memTotalKB,
+                            if settings.showVMStats,
+                               let total = model.guestStats?.memTotalKB,
                                let avail = model.guestStats?.memAvailableKB
                             {
                                 let usedGiB = Double(total - avail) / 1024 / 1024

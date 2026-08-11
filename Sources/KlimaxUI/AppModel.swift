@@ -21,6 +21,7 @@ final class AppModel {
     // VM live state (probed over SSH when running).
     var guestStats: GuestSSH.GuestStats?
     var guestLima0IP: String?
+    private var fetchingGuestOSInfo = false
 
     var clusters: [KindCluster] = []
     var clustersLoading = false
@@ -41,6 +42,12 @@ final class AppModel {
     // display. klimax applies managed-by, klimax.dev/fleet, and topology labels.
     var clusterLabels: [String: [String: String]] = [:]
     private var labelsTask: Task<Void, Never>?
+
+    // Kubelet version reported by each cluster's first node — the real
+    // Kubernetes version the kind nodes run, as opposed to the kindest/node tag
+    // configured in config.yaml (which only applies to clusters created since).
+    // Populated by the same node fetch that reads labels.
+    var clusterNodeVersion: [String: String] = [:]
 
     /// Fleet a cluster belongs to (klimax.dev/fleet node label), if any.
     func fleet(of clusterName: String) -> String? {
@@ -291,14 +298,47 @@ final class AppModel {
 
         // Keep the sidebar's Load and Used rows live off the same 5 s sample
         // (they read guestStats, which otherwise only refreshes on refreshAll).
-        // uptime/kernel change rarely and stay from the last full stats() call.
+        // uptime/kernel/OS change rarely and stay from the last full stats() call.
         guestStats = GuestSSH.GuestStats(
             uptime: guestStats?.uptime,
             loadAvg: raw.loadAvg ?? guestStats?.loadAvg,
             memTotalKB: raw.memTotalKB,
             memAvailableKB: raw.memAvailableKB,
-            kernel: guestStats?.kernel
+            kernel: guestStats?.kernel,
+            osName: guestStats?.osName
         )
+
+        await backfillGuestOSInfo(guest: guest)
+    }
+
+    /// Kernel and distro come from the full `stats()` call, which only runs on
+    /// `refreshAll()`. If that one call failed — the ControlMaster socket not
+    /// being up yet at launch is the common case — nothing would ever fetch
+    /// them again, leaving the About tab on "—". Retry from the poll loop (and
+    /// from the About tab itself) until we have them; they never change while
+    /// the VM is up, so this settles after one success.
+    private func backfillGuestOSInfo(guest: GuestSSH) async {
+        guard !fetchingGuestOSInfo,
+              guestStats?.kernel == nil || guestStats?.osName == nil
+        else { return }
+        fetchingGuestOSInfo = true
+        defer { fetchingGuestOSInfo = false }
+        guard let info = await guest.osInfo() else { return }
+        guestStats = GuestSSH.GuestStats(
+            uptime: guestStats?.uptime,
+            loadAvg: guestStats?.loadAvg,
+            memTotalKB: guestStats?.memTotalKB,
+            memAvailableKB: guestStats?.memAvailableKB,
+            kernel: info.kernel,
+            osName: info.osName ?? guestStats?.osName
+        )
+    }
+
+    /// Same backfill, for views that need the guest's kernel/distro but can't
+    /// rely on the VM poll loop running (it's off when "VM stats" is disabled).
+    func ensureGuestOSInfo() async {
+        guard let vm, vm.isRunning, let ssh = vm.ssh else { return }
+        await backfillGuestOSInfo(guest: GuestSSH(endpoint: ssh))
     }
 
     /// Reload VM, config, clusters, guest probes; refresh selected-cluster detail if any.
@@ -348,6 +388,7 @@ final class AppModel {
             clustersError = nil
             clusterCreatedAt = [:]
             clusterLabels = [:]
+            clusterNodeVersion = [:]
             return
         }
         clustersLoading = true
@@ -380,6 +421,29 @@ final class AppModel {
         let names = Set(clusters.map(\.name))
         clusterCreatedAt = clusterCreatedAt.filter { names.contains($0.key) }
         clusterLabels = clusterLabels.filter { names.contains($0.key) }
+        clusterNodeVersion = clusterNodeVersion.filter { names.contains($0.key) }
+    }
+
+    /// Kubernetes version of the kind nodes, for the sidebar footer.
+    ///
+    /// Prefers what the nodes actually report (kubelet version); falls back to
+    /// the `kind.nodeVersion` image tag from config.yaml when no cluster is up
+    /// yet. Clusters created against different image tags are reported as
+    /// "mixed", with the per-cluster breakdown in the tooltip.
+    var kubeNodeVersionSummary: (text: String, help: String)? {
+        let observed = clusters.compactMap { c in clusterNodeVersion[c.name].map { (c.name, $0) } }
+        let distinct = Set(observed.map(\.1))
+        if distinct.count == 1, let v = distinct.first {
+            return (v, "Kubernetes version reported by the kind nodes")
+        }
+        if distinct.count > 1 {
+            let lines = observed.sorted { $0.0 < $1.0 }.map { "\($0.0): \($0.1)" }
+            return ("mixed", "Kubernetes versions across clusters\n" + lines.joined(separator: "\n"))
+        }
+        if let configured = config?.kind?.nodeVersion {
+            return (configured, "kindest/node image tag configured in config.yaml — no cluster running")
+        }
+        return nil
     }
 
     /// Fetch node labels for any cluster we don't yet have cached. Labels are
@@ -389,18 +453,21 @@ final class AppModel {
         guard !missing.isEmpty else { return }
         labelsTask?.cancel()
         labelsTask = Task { [weak self] in
-            await withTaskGroup(of: (String, [String: String]?).self) { group in
+            await withTaskGroup(of: (String, KubeNode?).self) { group in
                 for c in missing {
                     let kubeconfig = c.kubeconfigPath
                     let name = c.name
                     group.addTask {
                         let nodes = try? await KubeClient(kubeconfigPath: kubeconfig).listNodes()
-                        return (name, nodes?.first?.metadata.labels)
+                        return (name, nodes?.first)
                     }
                 }
-                for await (name, labels) in group {
-                    guard !Task.isCancelled, let labels else { continue }
-                    self?.clusterLabels[name] = labels
+                for await (name, node) in group {
+                    guard !Task.isCancelled, let node else { continue }
+                    if let labels = node.metadata.labels { self?.clusterLabels[name] = labels }
+                    if let v = node.status.nodeInfo?.kubeletVersion {
+                        self?.clusterNodeVersion[name] = v
+                    }
                 }
             }
         }

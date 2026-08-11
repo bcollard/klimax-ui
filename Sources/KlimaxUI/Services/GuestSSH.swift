@@ -47,6 +47,8 @@ struct GuestSSH: Sendable {
         let memTotalKB: Int?
         let memAvailableKB: Int?
         let kernel: String?
+        /// `PRETTY_NAME` from /etc/os-release, e.g. "Ubuntu 26.04 LTS".
+        let osName: String?
     }
 
     /// Single-shot reading of CPU counters and memory totals for time-series
@@ -99,27 +101,57 @@ struct GuestSSH: Sendable {
         return (total, avail)
     }
 
-    func stats() async -> GuestStats {
-        async let uptime = try? await run("uptime -p").trimmingCharacters(in: .whitespacesAndNewlines)
-        async let loadAvg = try? await run("cat /proc/loadavg").trimmingCharacters(in: .whitespacesAndNewlines)
-        async let meminfo = try? await run("cat /proc/meminfo")
-        async let kernel = try? await run("uname -r").trimmingCharacters(in: .whitespacesAndNewlines)
+    /// Kernel release and distro name. Split out from `stats()` so the poll loop
+    /// can backfill them when the full stats call came back empty.
+    func osInfo() async -> (kernel: String, osName: String?)? {
+        guard let out = try? await run(Self.osCommand) else { return nil }
+        let lines = Self.nonEmptyLines(out)
+        guard let kernel = lines.first else { return nil }
+        return (kernel, lines.count >= 2 ? lines[1] : nil)
+    }
 
-        let memText = await meminfo
-        var memTotal: Int?
-        var memAvail: Int?
-        if let memText {
-            for line in memText.split(separator: "\n") {
-                if line.hasPrefix("MemTotal:") { memTotal = parseKB(String(line)) }
-                else if line.hasPrefix("MemAvailable:") { memAvail = parseKB(String(line)) }
-            }
+    /// `uname -r` then the unquoted PRETTY_NAME from /etc/os-release.
+    private static let osCommand =
+        #"uname -r; sed -n 's/^PRETTY_NAME="\(.*\)"/\1/p' /etc/os-release"#
+
+    private static func nonEmptyLines(_ s: String) -> [String] {
+        s.split(whereSeparator: \.isNewline)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+    }
+
+    func stats() async -> GuestStats {
+        // One round-trip, sections separated by `---`. This used to be four
+        // concurrent `run()` calls, but concurrent ssh invocations race each
+        // other while the ControlMaster socket is still being set up: a loser
+        // fails, its `try?` yields nil, and — since the 5 s sample loop only
+        // carries the previous value forward — that field stays nil for the
+        // lifetime of the app.
+        let empty = GuestStats(
+            uptime: nil, loadAvg: nil, memTotalKB: nil,
+            memAvailableKB: nil, kernel: nil, osName: nil
+        )
+        guard let out = try? await run(
+            "uptime -p; echo ---; cat /proc/loadavg; echo ---; head -3 /proc/meminfo; echo ---; "
+            + Self.osCommand
+        ) else { return empty }
+
+        let sections = out.components(separatedBy: "---")
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        func section(_ i: Int) -> String? {
+            guard i < sections.count, !sections[i].isEmpty else { return nil }
+            return sections[i]
         }
+
+        let (memTotal, memAvail) = parseMemInfo(section(2) ?? "")
+        let osLines = Self.nonEmptyLines(section(3) ?? "")
         return GuestStats(
-            uptime: await uptime,
-            loadAvg: await loadAvg,
+            uptime: section(0),
+            loadAvg: section(1),
             memTotalKB: memTotal,
             memAvailableKB: memAvail,
-            kernel: await kernel
+            kernel: osLines.first,
+            osName: osLines.count >= 2 ? osLines[1] : nil
         )
     }
 

@@ -30,7 +30,7 @@ struct KlimaxUIApp: App {
 
         // Standard macOS Settings scene — bound to ⌘, and the "Settings…" menu item.
         Settings {
-            SettingsView()
+            SettingsView(model: model)
                 .environment(settings)
         }
     }

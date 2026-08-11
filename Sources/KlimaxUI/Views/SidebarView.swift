@@ -3,6 +3,7 @@ import SwiftUI
 struct SidebarView: View {
     @Bindable var model: AppModel
     @Environment(AppSettings.self) private var settings
+    @Environment(\.openSettings) private var openSettings
     @State private var showNewClusterSheet = false
     @State private var newClusterName = ""
     @State private var mirrorsExpanded = true
@@ -84,31 +85,61 @@ struct SidebarView: View {
                 }
             }
 
+            // Footer: the active kube context, plus a way into the settings
+            // window (versions and guest OS details live in its About tab).
             Section {
-                HStack(spacing: 4) {
-                    Image(systemName: "cube")
-                    Text(model.currentKubeContext ?? "no kube context")
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-                .font(.caption2)
-                .foregroundStyle(model.currentKubeContext == nil ? .tertiary : .secondary)
-                .help("kubectl current-context")
+                VStack(alignment: .leading, spacing: 7) {
+                    footerRow(
+                        icon: "cube",
+                        text: model.currentKubeContext ?? "no kube context",
+                        help: "kubectl current-context",
+                        style: model.currentKubeContext == nil
+                            ? AnyShapeStyle(.tertiary)
+                            : AnyShapeStyle(.primary)
+                    )
 
-                VStack(alignment: .leading, spacing: 2) {
-                    if let cli = model.klimaxVersion {
-                        Text(cli.replacingOccurrences(of: "klimax ", with: "klimax CLI "))
+                    Button {
+                        openSettings()
+                    } label: {
+                        footerRow(
+                            icon: "gearshape",
+                            text: "Settings & About",
+                            help: "Preferences, refresh intervals, and versions (⌘,)",
+                            style: AnyShapeStyle(.secondary)
+                        )
+                        .contentShape(Rectangle())
                     }
-                    Text("Klimax UI \(AppAssets.appVersion)")
+                    .buttonStyle(.plain)
                 }
-                .font(.caption)
-                .foregroundStyle(.tertiary)
             }
         }
         .listStyle(.sidebar)
         .sheet(isPresented: $showNewClusterSheet) {
             NewClusterSheet(model: model, isPresented: $showNewClusterSheet)
         }
+    }
+
+    /// One line in the sidebar footer. The icon sits in a fixed-width slot so
+    /// every label starts on the same x regardless of glyph width.
+    private func footerRow(
+        icon: String,
+        text: String,
+        help: String,
+        style: AnyShapeStyle = AnyShapeStyle(.tertiary)
+    ) -> some View {
+        HStack(spacing: 5) {
+            Image(systemName: icon)
+                .frame(width: 13, alignment: .center)
+            Text(text)
+                .lineLimit(1)
+                .truncationMode(.middle)
+            // No .textSelection here: selectable Text draws in the label color
+            // and ignores .foregroundStyle, which flattens the whole footer to
+            // white. Copyability isn't worth losing the hierarchy.
+        }
+        .font(.caption2)
+        .foregroundStyle(style)
+        .help(help)
     }
 }
 

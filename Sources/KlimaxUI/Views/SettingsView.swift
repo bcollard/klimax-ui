@@ -1,8 +1,9 @@
 import SwiftUI
 
-/// The app's preferences window (⌘,). Two tabs: what's visible, and how often
-/// the various background pollers refresh.
+/// The app's preferences window (⌘,). Three tabs: what's visible, how often the
+/// various background pollers refresh, and the versions this app is talking to.
 struct SettingsView: View {
+    @Bindable var model: AppModel
     @Environment(AppSettings.self) private var settings
 
     var body: some View {
@@ -54,7 +55,65 @@ struct SettingsView: View {
             }
             .formStyle(.grouped)
             .tabItem { Label("Refresh", systemImage: "arrow.clockwise") }
+
+            AboutTab(model: model)
+                .tabItem { Label("About", systemImage: "info.circle") }
         }
         .frame(width: 460)
+    }
+}
+
+/// Versions of everything in the stack: this app, the klimax CLI it drives, the
+/// Kubernetes the kind nodes run, and the guest VM's Linux.
+private struct AboutTab: View {
+    @Bindable var model: AppModel
+
+    var body: some View {
+        // No app-logo header here: the extra height pushed the form past the
+        // window and the header scrolled up behind the translucent tab bar.
+        Form {
+            Section("Versions") {
+                row("Klimax UI", AppAssets.appVersion, icon: "macwindow")
+                row(
+                    "klimax CLI",
+                    model.klimaxVersion?
+                        .replacingOccurrences(of: "klimax ", with: ""),
+                    icon: "terminal"
+                )
+                row(
+                    "Kubernetes (kind nodes)",
+                    model.kubeNodeVersionSummary?.text,
+                    icon: "circle.grid.3x3",
+                    help: model.kubeNodeVersionSummary?.help
+                )
+            }
+
+            Section("Guest VM") {
+                row("Distribution", model.guestStats?.osName, icon: "opticaldiscdrive")
+                row("Kernel", model.guestStats?.kernel, icon: "cpu")
+            }
+
+            Section {
+                Text("Guest values are read over SSH and refresh with the VM; they show “—” while the VM is stopped.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .formStyle(.grouped)
+        // The VM poll loop backfills these, but it's off when "VM stats" is
+        // disabled — fetch on open so this tab is never stuck on "—".
+        .task { await model.ensureGuestOSInfo() }
+    }
+
+    private func row(_ label: String, _ value: String?, icon: String, help: String? = nil) -> some View {
+        LabeledContent {
+            Text(value ?? "—")
+                .font(.callout.monospacedDigit())
+                .foregroundStyle(value == nil ? AnyShapeStyle(.tertiary) : AnyShapeStyle(.primary))
+                .textSelection(.enabled)
+        } label: {
+            Label(label, systemImage: icon)
+        }
+        .help(help ?? "")
     }
 }

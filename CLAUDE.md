@@ -66,7 +66,7 @@ klimax-ui/
 │   │   ├── MirrorDetailView.swift      # mirror config + cache storage + usage hint
 │   │   ├── MetricsChartsView.swift     # cluster CPU/mem charts + top pods table
 │   │   ├── VMChartsView.swift          # VM CPU%/mem charts (Swift Charts + hover tooltips)
-│   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility + Refresh tabs
+│   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility + Refresh + About tabs
 │   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
 │   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
 │   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
@@ -144,7 +144,7 @@ This is exactly the Docker registry v2 on-disk layout — no registry HTTP API c
 
 ### Settings and scoped action logs
 
-- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView() }` scene binds it to ⌘, and the standard "Settings…" menu item.
+- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView(model:) }` scene binds it to ⌘, and the standard "Settings…" menu item; the sidebar footer's "Settings & About" button opens the same window via `@Environment(\.openSettings)`. The window's third tab, **About**, is the home for version/environment facts — Klimax UI, klimax CLI, the Kubernetes version of the kind nodes, and the guest VM's distribution and kernel — so it takes `AppModel` as well as `AppSettings`.
 - **Action logs are scoped** (`LogScope`: `.vm` / `.cluster(name)` / `.metrics(name)` / `.general`). Every completed action appends a `LogRecord` via `appendLog(scope:label:text:)`; each view surfaces only its relevant entry via `model.latestLog(for:)` / `latestLog(forAny:)` — the cluster Info/Services tabs show `.cluster`, the Metrics tab shows `.metrics`, the overview shows `.vm`/`.general`. The optional bottom **`ConsoleLogView`** (toggled by `showConsoleLog`, collapsible) shows the full timestamped `consoleTranscript` across all scopes.
 
 `AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the klimax CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
@@ -154,6 +154,11 @@ This is exactly the Docker registry v2 on-disk layout — no registry HTTP API c
 - **Node labels aren't in `klimax cluster list`** — read them from `kubectl` node metadata (`KubeNode.metadata.labels`), cached per cluster in `AppModel.clusterLabels`. klimax applies `managed-by`, `klimax.dev/fleet`, `topology.kubernetes.io/{region,zone}`, `ingress-ready` (the last is set by the klimax CLI's kind config, not the UI). `AppModel.displayLabels(_:)` filters out k8s system labels.
 - **Adding a label post-creation** uses `klimax cluster label <name> -l key=value` (KlimaxCLI.labelCluster) — **requires klimax 0.1.35+**.
 - **kube-context names == cluster name** (klimax merges each cluster into `~/.kube/config` under a context named after the cluster, not `kind-<name>`), so `currentKubeContext == cluster.name` and `use-context <name>` both work directly.
+- **The same node fetch also caches the kubelet version** (`AppModel.clusterNodeVersion`). `kubeNodeVersionSummary` reduces it for the About tab: one version when every cluster agrees, `mixed` (with a per-cluster tooltip) when they don't, and the configured `kind.nodeVersion` image tag from `config.yaml` as the fallback when no cluster is up.
+
+The About tab also shows the guest VM's distribution and kernel (`GuestStats.osName` / `.kernel`), read in one SSH round-trip: `uname -r` plus `PRETTY_NAME` from `/etc/os-release`. They come from the full `stats()` call (refreshAll), not the 5 s sample loop, which just carries them forward.
+
+The sidebar footer itself is down to two lines: the active kube context and the settings button. Note that `.textSelection(.enabled)` on a `Text` makes it draw in the label color and ignore `.foregroundStyle` — that's why those footer rows aren't selectable.
 
 Selection state lives in `AppModel.selection: SidebarSelection?` and drives both the sidebar list selection and `RootView`'s detail dispatch.
 

@@ -51,6 +51,16 @@ struct RootView: View {
         .onChange(of: settings.showVMStats) { _, _ in
             model.startVMPollingIfRunning()
         }
+        // The container list is only fetched while its preference is on, so
+        // turning it on has to seed the list rather than wait for the next poll.
+        .onChange(of: settings.showContainers) { _, on in
+            if on {
+                Task { await model.refreshContainers() }
+            } else {
+                if case .container = model.selection { model.selection = nil }
+                model.containers = []
+            }
+        }
     }
 
     @ViewBuilder
@@ -68,6 +78,12 @@ struct RootView: View {
         case .mirror(let name):
             if let mirror = model.mirrors.first(where: { $0.name == name }) {
                 MirrorDetailView(model: model, mirror: mirror)
+            } else {
+                OverviewDetailView(model: model)
+            }
+        case .container(let id):
+            if let container = model.containers.first(where: { $0.id == id }) {
+                ContainerDetailView(model: model, container: container)
             } else {
                 OverviewDetailView(model: model)
             }

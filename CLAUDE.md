@@ -43,15 +43,19 @@ klimax-ui/
 │   │   ├── VMMetrics.swift             # VM sample + history (raw /proc/stat ticks for CPU%)
 │   │   ├── AppSettings.swift           # @Observable prefs (visibility + poll cadences), UserDefaults-backed
 │   │   ├── LogRecord.swift             # LogScope enum + LogRecord for scoped action logs
-│   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | nil
+│   │   ├── DoctorReport.swift          # decodes `klimax doctor -o json` (stable check ids)
+│   │   ├── DockerContainer.swift       # guest container, compose membership, classification
+│   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | .container(id) | nil
 │   ├── Services/
 │   │   ├── InstanceDiscovery.swift     # scans ~/.klimax/, reads vz.pid liveness, lima.yaml
 │   │   ├── SSHConfigParser.swift       # hand-parses OpenSSH config from ssh.config
 │   │   ├── GuestSSH.swift              # ssh -F shell-out; reads /proc/stat, /proc/meminfo
 │   │   ├── ProcessRunner.swift         # async Process wrapper with PATH search
-│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list -o json`, up/down, create/delete
+│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list -o json`, up/down, create/delete, doctor
 │   │   ├── KubeClient.swift            # kubectl shell-out: nodes/pods/services/deployments
 │   │   ├── Helm.swift                  # helm repo add/update/install metrics-server
+│   │   ├── DockerClient.swift          # guest `docker ps`(+inspect labels)/logs/lifecycle over GuestSSH
+│   │   ├── CodeSignatureCheck.swift    # codesign + spctl + stapler on the running .app bundle
 │   │   ├── MetricsClient.swift         # kubectl get --raw /apis/metrics.k8s.io/v1beta1/{nodes,pods}
 │   │   ├── QuantityParser.swift        # k8s quantity strings → millicores / MiB
 │   │   ├── TCPProbe.swift              # NWConnection probe with 1.5s timeout
@@ -59,14 +63,16 @@ klimax-ui/
 │   │   └── RegistryCacheInspector.swift # counts tags + repos in Docker registry v2 layout
 │   ├── Views/
 │   │   ├── RootView.swift              # NavigationSplitView dispatcher
-│   │   ├── SidebarView.swift           # VM card + clusters + mirrors sections
-│   │   ├── OverviewDetailView.swift    # home dashboard with cluster/mirror cards + VM charts
+│   │   ├── SidebarView.swift           # VM card + clusters + mirrors + containers sections
+│   │   ├── OverviewDetailView.swift    # home dashboard with cluster/mirror/container cards + VM charts
 │   │   ├── ClusterDetailView.swift     # Info / Services / Metrics tab picker
 │   │   ├── ServicesTabView.swift       # LoadBalancer services with per-port TCP probes
 │   │   ├── MirrorDetailView.swift      # mirror config + cache storage + usage hint
 │   │   ├── MetricsChartsView.swift     # cluster CPU/mem charts + top pods table
 │   │   ├── VMChartsView.swift          # VM CPU%/mem charts (Swift Charts + hover tooltips)
-│   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility + Refresh + About tabs
+│   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility/Refresh/Diagnostics/About
+│   │   ├── DiagnosticsTabView.swift    # klimax doctor checks + app integrity block
+│   │   ├── ContainerDetailView.swift   # un-managed container: compose stack, ports, labels, logs, lifecycle
 │   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
 │   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
 │   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
@@ -131,6 +137,100 @@ For each selected cluster's LoadBalancer services, `AppModel.probeLoadBalancers(
 
 This is exactly the Docker registry v2 on-disk layout — no registry HTTP API call needed.
 
+### Guest containers — `docker ps` over SSH
+
+`DockerClient` runs one guest command per refresh, in two sections separated by a
+sentinel, and parses it into `DockerContainer`:
+
+1. `docker ps -a --no-trunc --format …` — **tab**-separated, because `.Ports`,
+   `.Networks`, `.Mounts` and `.Labels` are themselves comma-joined.
+2. `docker ps -aq | xargs -r docker inspect --format '{{.Id}}\t{{json .Config.Labels}}'`
+   — the label map as JSON.
+
+Both ride the same SSH round-trip; the network hop is the cost, not the second local
+docker call.
+
+**Never parse `{{.Labels}}` for anything that drives behavior.** That column comma-joins
+the label map *without escaping commas inside values*, and two labels routinely contain
+them — `com.docker.compose.project.config_files` (one entry per `-f` flag) and
+`com.docker.compose.depends_on`. A two-file compose stack silently splits into a bogus
+entry and a truncated path. So:
+
+- Every label the app **reasons about** gets its own `{{.Label "…"}}` column, which is
+  structurally immune.
+- The **displayed** label map comes from the `docker inspect` JSON, which is exact.
+- The `{{.Labels}}` parse survives only as the fallback if the inspect pass fails —
+  classification never depends on it, so a failure there can't make kind nodes show up
+  as strays.
+
+Classification (`DockerContainer.managed(mirrorNames:)`) decides what klimax owns:
+
+- **kind nodes** by the `io.x-k8s.kind.cluster` label — the same signal `kind get
+  clusters` uses, so it beats matching on the container name.
+- **registry mirrors** by name against `registries.mirrors[].name` from the klimax
+  config. klimax puts **no label** on these containers, so the config is the primary
+  signal; a `registry-*` name on a `registry:<tag>` image is the fallback for a config
+  that has drifted from what is actually running.
+
+Everything else is "un-managed" and surfaces in the sidebar/overview/detail views when
+`AppSettings.showContainers` is on. When it's off nothing queries the guest's docker at
+all. Published ports are linked at the VM's **lima0** address, not `127.0.0.1`: klimax
+sets `network.disablePortMirroring`, so Lima's loopback mirroring is off and lima0 is
+the only address that works from the host.
+
+#### Compose stacks
+
+Un-managed containers are bucketed by `com.docker.compose.project` into
+`AppModel.containerGroups` — stacks first (alphabetically, members ordered by service
+then replica), standalone containers last. A stack is a unit the user thinks about as a
+whole, so five flat `myapp-worker-{1..5}` rows next to an unrelated container hide the
+one fact that matters about them. Inside a stack, rows and cards are titled by
+**service** (`web`, `worker #2`), because the container name is just
+`<project>-<service>-<n>` repeated.
+
+Compose labels read (all verified against a live stack, Compose v5.5.1):
+
+| Label | Use |
+|---|---|
+| `com.docker.compose.project` | the group key; stack name (launch dir unless `-p` / `COMPOSE_PROJECT_NAME`) |
+| `com.docker.compose.service` | row/card title |
+| `com.docker.compose.container-number` | replica index, 1-based; shown as `#n` only when > 1 |
+| `com.docker.compose.oneoff` | `True`/`False` (Go casing, not JSON) — flags `docker compose run` throwaways |
+| `com.docker.compose.project.working_dir` | shown on the group header and detail card |
+| `com.docker.compose.project.config_files` | comma-separated list of compose files |
+
+> ⚠️ **Never run `docker compose up` inside the klimax VM casually.** The Compose in the
+> guest removes orphan containers *without* `--remove-orphans` being passed, and it
+> considers kind node containers orphans — a `docker compose up` in a scratch project
+> destroyed a running kind cluster's node (verified in `docker events`). Test compose
+> label handling with `docker run -l com.docker.compose.project=…` instead, which
+> produces identical labels with no orphan sweep.
+
+`ContainerDetailView` offers start / stop / restart (logged under `LogScope.container(id)`)
+and an on-demand `docker logs --tail N`. Deliberately **no `docker rm`** — removal is
+unrecoverable and these containers aren't klimax's to destroy.
+
+### Diagnostics — `klimax doctor` and the app's own signature
+
+The Settings window's **Diagnostics** tab answers two unrelated questions.
+
+`KlimaxCLI.doctor(fix:)` shells `klimax doctor -o json`; the check `id`s are a documented
+stable contract on the klimax side, so `DoctorCheck.title` keys its labels off them and an
+unknown `status` decodes to `.unknown` rather than failing the whole report. Nothing here
+is polled — the probes (route table, in-guest iptables, Rosetta) are far too heavy for a
+loop. `--fix` repairs the route / iptables / IP-forwarding checks itself, but the route fix
+shells to `sudo`; launched from an app bundle there is no controlling terminal, so sudo
+fails fast with "no tty present" and the UI surfaces that plus a copyable command.
+
+`CodeSignatureCheck` verifies the *running* bundle with `codesign --verify`, `codesign
+-dvvv` (the `-dvvv` is what makes it print the `Authority=` chain at all), `spctl -a -vv`,
+and `xcrun stapler validate`. Notarization is decided by the **stapled ticket** or a
+`source=Notarized Developer ID` from spctl — never by spctl's bare "accepted", which means
+nothing on a Mac with assessment disabled (`override=security disabled`, surfaced as a
+caveat). A `./build.sh` bundle reports "ad-hoc (local build)", which is a distinct state
+from a broken signature. This is not build provenance: it says nothing about which commit
+produced the binary.
+
 ---
 
 ## App model and polling
@@ -140,12 +240,12 @@ This is exactly the Docker registry v2 on-disk layout — no registry HTTP API c
 - `vmPollTask` — `settings.vmPollInterval` loop (default 5 s) driving `collectVMSample()` (`GuestSSH.rawSample()` → CPU%/mem). Started by `startVMPollingIfRunning()` when the VM is up **and** the "VM stats & graphs" preference is on; toggling that preference (via a `RootView` `.onChange`) starts/stops it.
 - `metricsTask` — `settings.metricsPollInterval` loop (default 15 s) scoped to the selected cluster; fetches node + pod metrics and appends to the per-cluster `MetricsHistory` ring buffer (capacity 60).
 - `probeTask` — one-shot `TaskGroup` triggered on cluster selection or service refresh.
-- `statePollTask` — `settings.clusterRefreshInterval` loop (default 6 s, `pollForExternalChanges()`) that detects out-of-band changes: VM started/stopped, or clusters created/deleted via the CLI. On a change it calls `refreshAll()`/`refreshClusters()` so the UI stays live without a manual ⌘R. Skips while `inFlightAction`/a running `creation` would refresh anyway.
+- `statePollTask` — `settings.clusterRefreshInterval` loop (default 6 s, `pollForExternalChanges()`) that detects out-of-band changes: VM started/stopped, clusters created/deleted via the CLI, and — when `showContainers` is on — containers that appeared or vanished (there is no cheaper signal for a `docker run` in a terminal than re-listing). On a change it calls `refreshAll()`/`refreshClusters()` so the UI stays live without a manual ⌘R. Skips while `inFlightAction`/a running `creation` would refresh anyway.
 
 ### Settings and scoped action logs
 
-- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView(model:) }` scene binds it to ⌘, and the standard "Settings…" menu item; the sidebar footer's "Settings & About" button opens the same window via `@Environment(\.openSettings)`. The window's third tab, **About**, is the home for version/environment facts — Klimax UI, klimax CLI, the Kubernetes version of the kind nodes, and the guest VM's distribution and kernel — so it takes `AppModel` as well as `AppSettings`.
-- **Action logs are scoped** (`LogScope`: `.vm` / `.cluster(name)` / `.metrics(name)` / `.general`). Every completed action appends a `LogRecord` via `appendLog(scope:label:text:)`; each view surfaces only its relevant entry via `model.latestLog(for:)` / `latestLog(forAny:)` — the cluster Info/Services tabs show `.cluster`, the Metrics tab shows `.metrics`, the overview shows `.vm`/`.general`. The optional bottom **`ConsoleLogView`** (toggled by `showConsoleLog`, collapsible) shows the full timestamped `consoleTranscript` across all scopes.
+- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`, `showContainers`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView(model:) }` scene binds it to ⌘, and the standard "Settings…" menu item; the sidebar footer's "Settings & About" button opens the same window via `@Environment(\.openSettings)`. The window's fourth tab, **About**, is the home for version/environment facts — Klimax UI, klimax CLI, the Kubernetes version of the kind nodes, and the guest VM's distribution and kernel — so it takes `AppModel` as well as `AppSettings`.
+- **Action logs are scoped** (`LogScope`: `.vm` / `.cluster(name)` / `.metrics(name)` / `.container(id)` / `.general`). Every completed action appends a `LogRecord` via `appendLog(scope:label:text:)`; each view surfaces only its relevant entry via `model.latestLog(for:)` / `latestLog(forAny:)` — the cluster Info/Services tabs show `.cluster`, the Metrics tab shows `.metrics`, the overview shows `.vm`/`.general`. The optional bottom **`ConsoleLogView`** (toggled by `showConsoleLog`, collapsible) shows the full timestamped `consoleTranscript` across all scopes.
 
 `AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the klimax CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
 
@@ -165,6 +265,14 @@ Selection state lives in `AppModel.selection: SidebarSelection?` and drives both
 ---
 
 ## Key design decisions
+
+### Un-managed containers are a separate concept from clusters
+
+kind nodes and registry mirrors already have first-class places in the UI (the Clusters
+and Registry mirrors sections). The Containers section is deliberately *everything else* —
+what a `docker run` in a terminal left behind — so it never duplicates what's above it. It
+is off by default: a stock klimax VM has none, and an empty section is worse than no
+section.
 
 ### Single-VM model
 

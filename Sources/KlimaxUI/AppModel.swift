@@ -99,6 +99,23 @@ final class AppModel {
     // clusters created/deleted via the CLI) and refreshes the UI to match.
     private var statePollTask: Task<Void, Never>?
 
+    // `klimax doctor` report, shown in the Settings window's Diagnostics tab.
+    // Run on demand only — the checks shell out to sudo-less `route`/`ssh`
+    // probes that are far too heavy for a poll loop.
+    var doctorReport: DoctorReport?
+    var doctorError: String?
+    var doctorRunning = false
+    var doctorRanAt: Date?
+
+    // Containers running in the guest VM, split into the ones klimax manages
+    // (kind nodes, registry mirrors) and everything else. Fetched only while
+    // the "un-managed containers" preference is on.
+    var containers: [DockerContainer] = []
+    var containersError: String?
+    var containersLoading = false
+    /// Tail of `docker logs` per container id, populated on demand.
+    var containerLogs: [String: String] = [:]
+
     // Registry mirror disk-usage measurements, keyed by mirror name.
     var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
 
@@ -202,8 +219,66 @@ final class AppModel {
         return nil
     }
 
+    var selectedContainer: DockerContainer? {
+        if case .container(let id) = selection {
+            return containers.first { $0.id == id }
+        }
+        return nil
+    }
+
     var mirrors: [KlimaxConfig.Registries.Mirror] {
         config?.registries?.mirrors ?? []
+    }
+
+    private var mirrorNames: Set<String> { Set(mirrors.map(\.name)) }
+
+    /// Containers klimax doesn't own — everything that isn't a kind node or a
+    /// pull-through mirror. Running first, then most recently created.
+    var unmanagedContainers: [DockerContainer] {
+        let names = mirrorNames
+        return containers
+            .filter { $0.managed(mirrorNames: names) == nil }
+            .sorted(by: Self.displayOrder)
+    }
+
+    /// The same containers bucketed by `com.docker.compose.project`, compose
+    /// stacks first (alphabetically), standalone containers last.
+    ///
+    /// A stack is a unit the user thinks about as a whole — its members share a
+    /// lifecycle and a compose file — so showing five rows of
+    /// `myapp-worker-{1..5}` flat next to an unrelated container hides the one
+    /// fact that matters about them.
+    var containerGroups: [ContainerGroup] {
+        var byProject: [String: [DockerContainer]] = [:]
+        var standalone: [DockerContainer] = []
+        for c in unmanagedContainers {
+            if let project = c.compose?.project {
+                byProject[project, default: []].append(c)
+            } else {
+                standalone.append(c)
+            }
+        }
+        var groups = byProject
+            .sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+            .map { project, members in
+                // Within a stack, order by service then replica — a stack's
+                // shape is more legible than its start times.
+                ContainerGroup(project: project, containers: members.sorted { a, b in
+                    let sa = a.compose?.service ?? "", sb = b.compose?.service ?? ""
+                    if sa != sb { return sa.localizedStandardCompare(sb) == .orderedAscending }
+                    return (a.compose?.containerNumber ?? 0) < (b.compose?.containerNumber ?? 0)
+                })
+            }
+        if !standalone.isEmpty {
+            groups.append(ContainerGroup(project: nil, containers: standalone))
+        }
+        return groups
+    }
+
+    /// Running first, then most recently created.
+    private static func displayOrder(_ a: DockerContainer, _ b: DockerContainer) -> Bool {
+        if a.isRunning != b.isRunning { return a.isRunning }
+        return (a.createdAt ?? .distantPast) > (b.createdAt ?? .distantPast)
     }
 
     // MARK: - Bootstrap
@@ -240,6 +315,10 @@ final class AppModel {
             return
         }
         guard nowRunning else { return }
+
+        // Containers come and go entirely outside klimax (a `docker run` in a
+        // terminal), so there is no cheaper signal than re-listing them.
+        if settings.showContainers { await refreshContainers() }
 
         // VM steady; check whether the cluster set changed out from under us.
         guard let latest = try? await KlimaxCLI.listClusters() else { return }
@@ -356,9 +435,14 @@ final class AppModel {
             async let statsTask = guest.stats()
             guestLima0IP = await ipTask
             guestStats = await statsTask
+            // Only when the feature is on: otherwise this is an SSH round-trip
+            // per refresh for a list nothing displays.
+            if settings.showContainers { await refreshContainers() }
         } else {
             guestLima0IP = nil
             guestStats = nil
+            containers = []
+            containersError = nil
         }
         // Drop stale selection — but keep it while that cluster is still
         // provisioning (it isn't in `clusters` yet by design).
@@ -368,6 +452,9 @@ final class AppModel {
             selection = nil
         }
         if case .mirror(let name) = selection, !mirrors.contains(where: { $0.name == name }) {
+            selection = nil
+        }
+        if case .container(let id) = selection, !containers.contains(where: { $0.id == id }) {
             selection = nil
         }
         await refreshSelection()
@@ -514,7 +601,7 @@ final class AppModel {
             }
             await loadClusterDetail(for: cluster)
             startMetricsPollingIfReady(for: cluster)
-        case .mirror, .none:
+        case .mirror, .container, .none:
             clusterDetail = nil
         }
     }
@@ -842,6 +929,102 @@ final class AppModel {
         await runAction("Uninstalling metrics-server on \(cluster.name)", scope: .metrics(cluster.name)) {
             try await Helm(kubeconfigPath: cluster.kubeconfigPath).uninstallMetricsServer()
         }
+    }
+
+    // MARK: - Diagnostics
+
+    /// Run `klimax doctor`, optionally letting it apply the repairs it can make
+    /// itself. On-demand only (from the Settings window's Diagnostics tab).
+    func runDoctor(applyFixes: Bool = false) async {
+        guard !doctorRunning else { return }
+        doctorRunning = true
+        defer { doctorRunning = false }
+        do {
+            doctorReport = try await KlimaxCLI.doctor(fix: applyFixes)
+            doctorError = nil
+        } catch {
+            doctorReport = nil
+            doctorError = error.localizedDescription
+        }
+        doctorRanAt = Date()
+        if applyFixes {
+            // A successful route/iptables/forwarding repair changes what the
+            // rest of the UI can reach, so re-read everything.
+            await refreshAll()
+        }
+    }
+
+    // MARK: - Guest containers
+
+    /// Guest-side docker client, or nil when the VM isn't up.
+    private var docker: DockerClient? {
+        guard let vm, vm.isRunning, let ssh = vm.ssh else { return nil }
+        return DockerClient(guest: GuestSSH(endpoint: ssh))
+    }
+
+    /// Re-list the guest's containers. One SSH round-trip; safe to call from
+    /// the state poll loop.
+    func refreshContainers() async {
+        guard let docker else {
+            containers = []
+            containersError = nil
+            return
+        }
+        containersLoading = true
+        defer { containersLoading = false }
+        do {
+            containers = try await docker.list()
+            containersError = nil
+        } catch {
+            containers = []
+            containersError = error.localizedDescription
+        }
+    }
+
+    /// Fetch (and cache) the tail of a container's log.
+    func loadContainerLogs(_ container: DockerContainer, lines: Int = 200) async {
+        guard let docker else { return }
+        do {
+            let text = try await docker.logs(id: container.id, lines: lines)
+            containerLogs[container.id] = text.isEmpty ? "(no output)" : text
+        } catch {
+            containerLogs[container.id] = "Failed to read logs: \(error.localizedDescription)"
+        }
+    }
+
+    enum ContainerAction: String, Sendable {
+        case start, stop, restart
+
+        var verb: String {
+            switch self {
+            case .start: return "Starting"
+            case .stop: return "Stopping"
+            case .restart: return "Restarting"
+            }
+        }
+    }
+
+    /// Start/stop/restart a container in the guest. Deliberately no `docker rm`:
+    /// removal is unrecoverable and these containers aren't klimax's to destroy.
+    func performContainerAction(_ action: ContainerAction, on container: DockerContainer) async {
+        guard let docker, inFlightAction == nil else { return }
+        let label = "\(action.verb) container \(container.name)"
+        inFlightAction = label
+        defer { inFlightAction = nil }
+        let text: String
+        do {
+            let out: String
+            switch action {
+            case .start: out = try await docker.start(id: container.id)
+            case .stop: out = try await docker.stop(id: container.id)
+            case .restart: out = try await docker.restart(id: container.id)
+            }
+            text = "\(label) — ok\n\(out)"
+        } catch {
+            text = "\(label) failed: \(error.localizedDescription)"
+        }
+        appendLog(scope: .container(container.id), label: label, text: text)
+        await refreshContainers()
     }
 
     private func runAction(_ label: String, scope: LogScope, _ work: () async throws -> ProcessResult) async {

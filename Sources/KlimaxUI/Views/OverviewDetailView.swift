@@ -37,6 +37,9 @@ struct OverviewDetailView: View {
                 if settings.showMirrors {
                     mirrorsSection
                 }
+                if settings.showContainers {
+                    containersSection
+                }
                 if settings.showVMStats, model.vm?.isRunning == true {
                     VMChartsView(model: model)
                 }
@@ -173,6 +176,84 @@ struct OverviewDetailView: View {
         }
     }
 
+    // MARK: - Containers
+
+    private var containersSection: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(
+                title: "Containers",
+                count: model.unmanagedContainers.count,
+                trailing: AnyView(
+                    HStack(spacing: 8) {
+                        if model.containersLoading {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Button {
+                            Task { await model.refreshContainers() }
+                        } label: {
+                            Image(systemName: "arrow.clockwise")
+                        }
+                        .controlSize(.small)
+                        .buttonStyle(.borderless)
+                        .help("Re-list the VM's containers")
+                    }
+                )
+            )
+            if model.vm?.isRunning != true {
+                emptyCard("Start the VM to view containers.")
+            } else if let error = model.containersError {
+                emptyCard(error)
+            } else if model.unmanagedContainers.isEmpty {
+                emptyCard("No un-managed containers. The kind nodes and registry mirrors klimax runs are listed above, not here.")
+            } else {
+                VStack(alignment: .leading, spacing: 14) {
+                    ForEach(model.containerGroups) { group in
+                        VStack(alignment: .leading, spacing: 8) {
+                            // Only compose stacks get a sub-heading; the
+                            // standalone bucket is just the rest.
+                            if !group.isStandalone {
+                                composeGroupHeader(group)
+                            }
+                            LazyVGrid(
+                                columns: [GridItem(.adaptive(minimum: 260), spacing: 12)],
+                                alignment: .leading,
+                                spacing: 12
+                            ) {
+                                ForEach(group.containers) { c in
+                                    ContainerCard(container: c) {
+                                        model.selection = .container(id: c.id)
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func composeGroupHeader(_ group: ContainerGroup) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "square.stack.3d.down.right.fill")
+                .font(.caption)
+                .foregroundStyle(.teal)
+            Text(group.title)
+                .font(.headline)
+            Text("\(group.runningCount)/\(group.containers.count) up")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            if let dir = group.workingDir {
+                Text(dir)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Spacer()
+        }
+        .help("docker compose project \"\(group.title)\"")
+    }
+
     // MARK: - Bits
 
     private func sectionHeader(title: String, count: Int, trailing: AnyView?) -> some View {
@@ -292,6 +373,61 @@ private struct MirrorCard: View {
         }
         .buttonStyle(.plain)
         .onHover { hovering = $0 }
+    }
+}
+
+private struct ContainerCard: View {
+    let container: DockerContainer
+    let action: () -> Void
+    @State private var hovering = false
+
+    var body: some View {
+        Button(action: action) {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack {
+                    Image(systemName: "shippingbox.fill")
+                        .foregroundStyle(container.isRunning ? .teal : .gray)
+                    // Within a stack the service is the identity; the full name
+                    // is `<project>-<service>-<n>` on every card.
+                    Text(container.compose?.serviceLabel ?? container.name)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    Spacer()
+                    Image(systemName: "chevron.right")
+                        .foregroundStyle(.tertiary)
+                        .font(.caption)
+                }
+                HStack(spacing: 6) {
+                    pill(container.state)
+                    if container.compose?.isOneOff == true {
+                        pill("one-off")
+                    }
+                    ForEach(container.ports.filter(\.isPublished).prefix(2)) { port in
+                        pill(":\(port.hostPort ?? 0)")
+                    }
+                }
+                Text(container.image)
+                    .font(.caption2.monospaced())
+                    .foregroundStyle(.tertiary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(12)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10)
+                    .fill(Color.secondary.opacity(hovering ? 0.15 : 0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 10)
+                    .stroke(Color.secondary.opacity(hovering ? 0.25 : 0), lineWidth: 1)
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .onHover { hovering = $0 }
+        .help("\(container.name)\n\(container.status)")
     }
 }
 

@@ -7,6 +7,7 @@ struct SidebarView: View {
     @State private var showNewClusterSheet = false
     @State private var newClusterName = ""
     @State private var mirrorsExpanded = true
+    @State private var containersExpanded = true
 
     var body: some View {
         List(selection: $model.selection) {
@@ -82,6 +83,49 @@ struct SidebarView: View {
                         .font(.headline)
                         .textCase(nil)
                         .padding(.bottom, 6)
+                }
+            }
+
+            if settings.showContainers {
+                Section(isExpanded: $containersExpanded) {
+                    if model.vm?.isRunning != true {
+                        Text("Start the VM to view containers.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else if let error = model.containersError {
+                        Text(error)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    } else if model.unmanagedContainers.isEmpty {
+                        Text("No un-managed containers.")
+                            .font(.callout)
+                            .foregroundStyle(.secondary)
+                    } else {
+                        ForEach(model.containerGroups) { group in
+                            // Only compose stacks get a heading; standalone
+                            // containers would just be a header over a list of
+                            // unrelated things.
+                            if !group.isStandalone {
+                                ComposeGroupHeader(group: group)
+                            }
+                            ForEach(group.containers) { c in
+                                ContainerRow(container: c, indented: !group.isStandalone)
+                                    .tag(SidebarSelection.container(id: c.id))
+                            }
+                        }
+                    }
+                } header: {
+                    HStack(spacing: 8) {
+                        Text("Containers")
+                            .font(.headline)
+                            .textCase(nil)
+                        if model.containersLoading {
+                            ProgressView().controlSize(.mini)
+                        }
+                        Spacer()
+                    }
+                    .padding(.bottom, 6)
+                    .help("Containers in the VM that klimax doesn't manage — the kind nodes and registry mirrors are excluded.")
                 }
             }
 
@@ -230,6 +274,75 @@ private struct MirrorRow: View {
             Image(systemName: "arrow.triangle.2.circlepath")
                 .foregroundStyle(.purple)
         }
+    }
+}
+
+/// Heading for one `docker compose` project inside the Containers section.
+/// Not tagged, so it never becomes a selectable row.
+private struct ComposeGroupHeader: View {
+    let group: ContainerGroup
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "square.stack.3d.down.right.fill")
+                .font(.caption2)
+                .foregroundStyle(.teal)
+            Text(group.title)
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(group.runningCount)/\(group.containers.count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.top, 4)
+        .help(
+            "docker compose project \"\(group.title)\""
+            + (group.workingDir.map { "\n\($0)" } ?? "")
+        )
+    }
+}
+
+private struct ContainerRow: View {
+    let container: DockerContainer
+    /// Inset under a compose project heading.
+    var indented: Bool = false
+
+    /// Inside a stack the service name is what identifies the container; the
+    /// full name is just `<project>-<service>-<n>` repeated on every row.
+    private var title: String {
+        container.compose?.serviceLabel ?? container.name
+    }
+
+    var body: some View {
+        Label {
+            VStack(alignment: .leading, spacing: 1) {
+                HStack(spacing: 4) {
+                    Text(title)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                    if container.compose?.isOneOff == true {
+                        Text("one-off")
+                            .font(.caption2)
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 4)
+                            .background(Capsule().fill(Color.orange.opacity(0.18)))
+                            .help("Started by `docker compose run`, not part of the stack's services")
+                    }
+                }
+                Text(container.image)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        } icon: {
+            Image(systemName: "shippingbox.fill")
+                .foregroundStyle(container.isRunning ? .teal : .gray)
+        }
+        .padding(.leading, indented ? 10 : 0)
+        .help("\(container.name)\n\(container.status) — \(container.shortID)")
     }
 }
 

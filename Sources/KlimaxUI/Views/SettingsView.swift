@@ -1,7 +1,8 @@
 import SwiftUI
 
-/// The app's preferences window (⌘,). Three tabs: what's visible, how often the
-/// various background pollers refresh, and the versions this app is talking to.
+/// The app's preferences window (⌘,). Four tabs: what's visible, how often the
+/// various background pollers refresh, the health of the klimax stack and of
+/// this app bundle, and the versions this app is talking to.
 struct SettingsView: View {
     @Bindable var model: AppModel
     @Environment(AppSettings.self) private var settings
@@ -25,6 +26,12 @@ struct SettingsView: View {
                 Section {
                     Toggle("VM stats & graphs", isOn: $settings.showVMStats)
                     Text("Show the VM's load and memory rows plus the CPU/memory charts. When off, the VM is not polled over SSH.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Section {
+                    Toggle("Un-managed containers", isOn: $settings.showContainers)
+                    Text("Show containers running in the VM that klimax doesn't own — everything except the kind nodes and the registry mirrors. When off, the VM's docker is not queried.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -56,10 +63,16 @@ struct SettingsView: View {
             .formStyle(.grouped)
             .tabItem { Label("Refresh", systemImage: "arrow.clockwise") }
 
+            DiagnosticsTabView(model: model)
+                .tabItem { Label("Diagnostics", systemImage: "stethoscope") }
+
             AboutTab(model: model)
                 .tabItem { Label("About", systemImage: "info.circle") }
         }
-        .frame(width: 460)
+        // Explicit height: left to size itself the TabView settles on the
+        // shortest tab and clips the taller ones (Visibility's fourth toggle,
+        // the Diagnostics checks) behind a scroll bar the user won't look for.
+        .frame(width: 520, height: 620)
     }
 }
 

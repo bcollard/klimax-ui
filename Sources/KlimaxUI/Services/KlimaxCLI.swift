@@ -68,6 +68,34 @@ enum KlimaxCLI {
         try await ProcessRunner.run(executable, ["cluster", "delete", name, "-y"])
     }
 
+    /// Run `klimax doctor -o json`, optionally applying the repairs klimax can
+    /// perform itself (`--fix`).
+    ///
+    /// The report is on stdout; klimax's own logging goes to stderr, so we
+    /// decode stdout alone. `doctor` exits 0 even when checks fail (the report
+    /// carries `ok: false`), but we decode regardless of exit code so a future
+    /// klimax that starts signalling failure through the exit status still
+    /// renders its report.
+    ///
+    /// `--fix` shells out to `sudo` for the macOS route repair. Launched from
+    /// the app bundle there is no controlling terminal, so sudo fails fast with
+    /// "no tty present" rather than blocking on a password prompt — that lands
+    /// in the check's `fixError` and the UI offers the command to run by hand.
+    static func doctor(fix: Bool = false) async throws -> DoctorReport {
+        var args = ["doctor", "-o", "json"]
+        if fix { args.append("--fix") }
+        let result = try await ProcessRunner.run(executable, args)
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = stdout.data(using: .utf8), !stdout.isEmpty else {
+            throw CLIError.command("doctor", result.exitCode, result.stderr)
+        }
+        do {
+            return try JSONDecoder().decode(DoctorReport.self, from: data)
+        } catch {
+            throw CLIError.decode(error.localizedDescription)
+        }
+    }
+
     /// Return klimax version string, e.g. "klimax 0.1.25".
     static func version() async throws -> String {
         let result = try await ProcessRunner.run(executable, ["version"])

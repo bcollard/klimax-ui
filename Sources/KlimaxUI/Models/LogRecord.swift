@@ -11,6 +11,9 @@ enum LogScope: Hashable, Sendable {
     case cluster(String)
     /// metrics-server install/uninstall for a cluster — shown on its Metrics tab.
     case metrics(String)
+    /// A guest-VM container's lifecycle (start/stop/restart) — shown on that
+    /// container's detail view.
+    case container(String)
     /// Fleet-wide actions with no single home (e.g. delete-all) — shown on the overview.
     case general
 }

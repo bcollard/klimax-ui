@@ -22,6 +22,12 @@ final class AppSettings {
     /// the VM resources charts). When off, VM polling over SSH is also paused.
     var showVMStats: Bool { didSet { store.set(showVMStats, forKey: Keys.showVMStats) } }
 
+    /// Show the containers running in the guest VM that klimax does not manage
+    /// — everything except the kind nodes and the pull-through registry
+    /// mirrors, both of which already have their own place in the UI. Off by
+    /// default: a stock klimax VM has none, so the section would just be empty.
+    var showContainers: Bool { didSet { store.set(showContainers, forKey: Keys.showContainers) } }
+
     // MARK: Refresh cadences (seconds)
 
     /// How often we poll for out-of-band cluster list changes (create/delete
@@ -50,6 +56,7 @@ final class AppSettings {
             Keys.showConsoleLog: false,
             Keys.showMirrors: true,
             Keys.showVMStats: true,
+            Keys.showContainers: false,
             Keys.clusterRefreshSeconds: 6.0,
             Keys.vmPollSeconds: 5.0,
             Keys.metricsPollSeconds: 15.0,
@@ -57,6 +64,7 @@ final class AppSettings {
         showConsoleLog = store.bool(forKey: Keys.showConsoleLog)
         showMirrors = store.bool(forKey: Keys.showMirrors)
         showVMStats = store.bool(forKey: Keys.showVMStats)
+        showContainers = store.bool(forKey: Keys.showContainers)
         clusterRefreshSeconds = store.double(forKey: Keys.clusterRefreshSeconds)
         vmPollSeconds = store.double(forKey: Keys.vmPollSeconds)
         metricsPollSeconds = store.double(forKey: Keys.metricsPollSeconds)
@@ -66,6 +74,7 @@ final class AppSettings {
         static let showConsoleLog = "settings.showConsoleLog"
         static let showMirrors = "settings.showMirrors"
         static let showVMStats = "settings.showVMStats"
+        static let showContainers = "settings.showContainers"
         static let clusterRefreshSeconds = "settings.clusterRefreshSeconds"
         static let vmPollSeconds = "settings.vmPollSeconds"
         static let metricsPollSeconds = "settings.metricsPollSeconds"

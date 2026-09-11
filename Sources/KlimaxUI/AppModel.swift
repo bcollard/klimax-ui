@@ -1090,12 +1090,13 @@ final class AppModel {
     /// down` — that walks into the same orphan-sweep failure mode as `up` (see
     /// CLAUDE.md) — but plain `docker rm -f` against the stack's own ids.
     ///
-    /// This exists because a stack's containers can outlive its compose
-    /// metadata: `docker compose ls` stops recognizing a stack once its
-    /// compose file or working directory is gone, or it was launched from a
-    /// different machine/context against this VM's docker socket, while the
-    /// containers themselves keep showing up in `docker ps` forever. The view
-    /// gates the call behind a confirmation dialog — this is irreversible.
+    /// This exists because `docker compose ls` hides a fully stopped project
+    /// by default (it lists running projects only; `-a` shows the rest), so a
+    /// stack sitting `exited` in the guest is invisible to a plain `ls` even
+    /// though `compose down` would work fine on it. The app has no such blind
+    /// spot — it always lists every container — so this is the in-app way to
+    /// clear one out. The view gates the call behind a confirmation dialog —
+    /// this is irreversible.
     func performStackRemoval(_ group: ContainerGroup) async {
         guard let docker, inFlightAction == nil, !group.isStandalone else { return }
         let ids = group.containers.map(\.id)

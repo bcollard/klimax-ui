@@ -220,11 +220,13 @@ The stack as a whole gets Start/Stop/Remove next to its name in the sidebar and 
 stack's own container ids, never the real `docker compose up`/`down` — see the orphan-sweep
 warning above; `docker compose down` would walk into the same failure mode as `up`. Remove
 is gated behind a confirmation dialog (`ContainerGroup`-keyed `@State`, one per view) since
-it's the one irreversible action here. It exists because a stack's containers can outlive
-its compose metadata — `docker compose ls` stops recognizing a stack once its compose file
-or working directory is gone (or was launched from a different machine/context against this
-VM's docker socket), while the containers themselves keep showing up in `docker ps` forever;
-this is the only way to clear those out from the app.
+it's the one irreversible action here. It exists because `docker compose ls` **hides fully
+stopped projects by default** (`ls` lists running projects only; `-a` is needed to see a
+project with zero running containers) — so a stack sitting `exited` in the guest, like
+every real example we've seen, is invisible to a plain `docker compose ls` even though
+`compose down` would still work fine on it. The app has no such blind spot: it always shows
+every container regardless of state, so Remove is the in-app way to clear one out without
+first rediscovering `-a` or the project's original compose files.
 
 ### Host mounts — `klimax status -o json`
 

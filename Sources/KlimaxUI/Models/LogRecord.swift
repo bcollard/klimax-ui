@@ -14,6 +14,9 @@ enum LogScope: Hashable, Sendable {
     /// A guest-VM container's lifecycle (start/stop/restart) — shown on that
     /// container's detail view.
     case container(String)
+    /// A whole compose stack's lifecycle (start all / stop all), keyed by
+    /// project name — shown next to the stack's group header.
+    case composeStack(String)
     /// Fleet-wide actions with no single home (e.g. delete-all) — shown on the overview.
     case general
 }

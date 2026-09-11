@@ -1058,6 +1058,34 @@ final class AppModel {
         await refreshContainers()
     }
 
+    /// Start/stop every container in a compose stack as one docker call.
+    ///
+    /// Not `docker compose up`/`down`: this project has already lost a
+    /// running kind node to compose's orphan sweep on `up` (see CLAUDE.md), so
+    /// the real compose CLI stays off-limits here. `docker start`/`stop`
+    /// against the stack's own container ids gets the same practical result
+    /// — the stack's containers come up or go down — without touching
+    /// anything else in the guest.
+    func performStackAction(_ action: ContainerAction, on group: ContainerGroup) async {
+        guard let docker, inFlightAction == nil, !group.isStandalone else { return }
+        guard action == .start || action == .stop else { return }
+        let ids = group.containers.map(\.id)
+        let label = "\(action.verb) stack \(group.title)"
+        inFlightAction = label
+        defer { inFlightAction = nil }
+        let text: String
+        do {
+            let out = action == .start
+                ? try await docker.start(ids: ids)
+                : try await docker.stop(ids: ids)
+            text = "\(label) — ok\n\(out)"
+        } catch {
+            text = "\(label) failed: \(error.localizedDescription)"
+        }
+        appendLog(scope: .composeStack(group.title), label: label, text: text)
+        await refreshContainers()
+    }
+
     private func runAction(_ label: String, scope: LogScope, _ work: () async throws -> ProcessResult) async {
         inFlightAction = label
         creation = nil  // a new action supersedes any finished create session

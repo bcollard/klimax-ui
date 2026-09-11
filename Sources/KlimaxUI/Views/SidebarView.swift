@@ -106,7 +106,7 @@ struct SidebarView: View {
                             // containers would just be a header over a list of
                             // unrelated things.
                             if !group.isStandalone {
-                                ComposeGroupHeader(group: group)
+                                ComposeGroupHeader(model: model, group: group)
                             }
                             ForEach(group.containers) { c in
                                 ContainerRow(container: c, indented: !group.isStandalone)
@@ -280,7 +280,11 @@ private struct MirrorRow: View {
 /// Heading for one `docker compose` project inside the Containers section.
 /// Not tagged, so it never becomes a selectable row.
 private struct ComposeGroupHeader: View {
+    @Bindable var model: AppModel
     let group: ContainerGroup
+
+    private var allRunning: Bool { group.runningCount == group.containers.count }
+    private var allStopped: Bool { group.runningCount == 0 }
 
     var body: some View {
         HStack(spacing: 5) {
@@ -295,7 +299,28 @@ private struct ComposeGroupHeader: View {
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.secondary)
             Spacer()
+            if model.inFlightAction != nil {
+                ProgressView().controlSize(.mini)
+            } else {
+                Button {
+                    Task { await model.performStackAction(.stop, on: group) }
+                } label: {
+                    Image(systemName: "stop.fill")
+                }
+                .buttonStyle(.plain)
+                .disabled(allStopped)
+                .help("Stop every container in this stack")
+                Button {
+                    Task { await model.performStackAction(.start, on: group) }
+                } label: {
+                    Image(systemName: "play.fill")
+                }
+                .buttonStyle(.plain)
+                .disabled(allRunning)
+                .help("Start every container in this stack")
+            }
         }
+        .font(.caption2)
         .padding(.top, 4)
         .help(
             "docker compose project \"\(group.title)\""

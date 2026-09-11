@@ -104,6 +104,22 @@ struct DockerClient: Sendable {
     func stop(id: String) async throws -> String { try await guest.run("docker stop \(id)") }
     func restart(id: String) async throws -> String { try await guest.run("docker restart \(id)") }
 
+    /// Start/stop every container of a compose stack in one round-trip.
+    ///
+    /// Deliberately `docker start`/`stop` on the specific ids rather than the
+    /// real `docker compose up`/`down` in the stack's working directory: this
+    /// project has already lost a kind node to compose's orphan sweep on `up`
+    /// (see CLAUDE.md), and `down` would remove the containers outright. Ids
+    /// are always docker's own hex container ids, never interpolated from
+    /// anything a container image or label could influence.
+    func start(ids: [String]) async throws -> String {
+        try await guest.run("docker start \(ids.joined(separator: " "))")
+    }
+
+    func stop(ids: [String]) async throws -> String {
+        try await guest.run("docker stop \(ids.joined(separator: " "))")
+    }
+
     // MARK: - Parsing
 
     static func parse(_ line: String) -> DockerContainer? {

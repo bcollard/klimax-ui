@@ -176,7 +176,7 @@ struct ContainerDetailView: View {
                             }
                         }
                     }
-                    Text("Stopping this container does not stop the rest of the stack — use `docker compose` in the working directory for that.")
+                    Text("Stopping this container does not stop the rest of the stack — use the Start/Stop buttons next to the stack's name in the sidebar or overview for that.")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .padding(.top, 4)

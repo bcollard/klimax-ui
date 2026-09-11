@@ -253,6 +253,26 @@ struct OverviewDetailView: View {
                     .truncationMode(.middle)
             }
             Spacer()
+            if model.inFlightAction != nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Button {
+                    Task { await model.performStackAction(.stop, on: group) }
+                } label: {
+                    Label("Stop", systemImage: "stop.fill")
+                }
+                .controlSize(.small)
+                .disabled(group.runningCount == 0)
+                .help("Stop every container in this stack")
+                Button {
+                    Task { await model.performStackAction(.start, on: group) }
+                } label: {
+                    Label("Start", systemImage: "play.fill")
+                }
+                .controlSize(.small)
+                .disabled(group.runningCount == group.containers.count)
+                .help("Start every container in this stack")
+            }
         }
         .help("docker compose project \"\(group.title)\"")
     }

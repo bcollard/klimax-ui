@@ -348,6 +348,15 @@ final class AppModel {
         // terminal), so there is no cheaper signal than re-listing them.
         if settings.showContainers { await refreshContainers() }
 
+        // Retry any cluster whose labels/creation-time we never managed to
+        // fetch — both are one-shot per cluster (see their doc comments), but
+        // that first attempt can race a cluster that only just finished
+        // creating (API server/kubeconfig not quite ready yet), and nothing
+        // else would ever prompt a second try since the cluster set itself
+        // isn't changing. Both no-op immediately once nothing is missing.
+        refreshCreationTimes()
+        refreshClusterLabels()
+
         // VM steady; check whether the cluster set changed out from under us.
         guard let latest = try? await KlimaxCLI.listClusters() else { return }
         if Set(latest.map(\.name)) != Set(clusters.map(\.name)) {

@@ -18,30 +18,37 @@ struct VMChartsView: View {
         return samples.min { abs($0.timestamp.timeIntervalSince(t)) < abs($1.timestamp.timeIntervalSince(t)) }
     }
 
+    // The title sits *outside* the card, matching every other section on the
+    // overview (Clusters, Docker containers, Volume mounts). Keeping it inside
+    // the GroupBox made this one section's heading hang at a different depth
+    // from the rest of the page.
     var body: some View {
-        GroupBox {
-            VStack(alignment: .leading, spacing: 14) {
-                header
-                if samples.count < 2 {
-                    Text("Waiting for the first interval… (poll every \(stepSeconds)s)")
-                        .foregroundStyle(.secondary)
-                        .font(.callout)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(.vertical, 8)
-                } else {
-                    cpuChart
-                    memChart
+        VStack(alignment: .leading, spacing: 10) {
+            header
+            GroupBox {
+                VStack(alignment: .leading, spacing: 14) {
+                    if samples.count < 2 {
+                        Text("Waiting for the first interval… (poll every \(stepSeconds)s)")
+                            .foregroundStyle(.secondary)
+                            .font(.callout)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 8)
+                    } else {
+                        cpuChart
+                        memChart
+                    }
                 }
+                .padding(8)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(8)
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
 
     private var header: some View {
         HStack(alignment: .firstTextBaseline) {
+            // .title3.bold() is what OverviewDetailView.sectionHeader uses.
             Text("VM resources")
-                .font(.headline)
+                .font(.title3.bold())
             Text("\(stepSeconds)s resolution · last \(model.vmHistory.capacity * stepSeconds / 60) min")
                 .font(.caption)
                 .foregroundStyle(.secondary)

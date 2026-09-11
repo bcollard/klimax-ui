@@ -20,6 +20,11 @@ Klimax UI rolls all of that into one native SwiftUI app:
 - **Cluster creation, live** — create a cluster and watch its `kind` log stream in-app (with a cancel button); a "delete all" action tears the whole set down.
 - **Labels & fleets** — shows each cluster's node labels (fleet, region/zone, …), badges its fleet, and can add a label to a running cluster (`klimax cluster label`, needs klimax 0.1.35+).
 - **kubectl context** — badges the active cluster and switches `current-context` from the cluster view.
+- **Docker containers** — optionally lists the containers you run in the VM: everything that isn't a kind node or a registry mirror. Containers are grouped by `docker compose` project and titled by service, with ports, labels, a log tail, and start/stop/restart per container.
+- **Bind-mount reality check** — docker resolves a `-v` source *inside* the VM, so binding a host path klimax doesn't share doesn't fail: dockerd creates it empty in the guest and your container silently sees nothing. Each container's mounts are checked against the directories the VM actually shares (`vm.mounts`, klimax 0.1.59+) and flagged when they don't reach your Mac.
+- **Volume mounts** — lists the directories of your Mac the VM can see, read from the live Lima instance, and warns when your config has changes the VM hasn't picked up yet.
+- **Diagnostics** — runs `klimax doctor` in-app, showing each health check with its fix command (copyable), and applying the repairs klimax can make itself. Also surfaces the HTTP proxy and extra CA trust klimax applies to dockerd, the mirrors and every kind node.
+- **App integrity** — verifies that this copy of Klimax is genuinely Developer-ID signed and notarized by Apple, checkable offline against Apple's public roots.
 - **Stays live** — auto-refreshes when the VM starts/stops or clusters are created/deleted out-of-band (e.g. via the CLI).
 - **Single-VM model** — klimax only ever runs one VM, so the sidebar surfaces that one VM at the top and the rest of the workspace beneath it.
 
@@ -67,6 +72,8 @@ No backend, no daemon, no new state — Klimax UI reads from the same places kli
 - **Cluster metrics** come from the Kubernetes `metrics.k8s.io` API. If `metrics-server` isn't installed yet, the Metrics tab offers a one-click Helm install with `--set args[0]=--kubelet-insecure-tls` (required for kind's self-signed kubelet).
 - **LoadBalancer reachability** is probed via `NWConnection` from the host — actual TCP, not a static CIDR check.
 - **Cache size** uses `du -sk`; image count walks the Docker registry v2 layout (`_manifests/tags/*/current/link` for tags, `_manifests` dirs for repos).
+- **Containers** are listed with one `docker ps` in the guest over that same SSH socket. kind nodes are identified by the `io.x-k8s.kind.cluster` label and mirrors by the names in your klimax config, so both are filtered out; what's left is grouped by `com.docker.compose.project`.
+- **Diagnostics** parses `klimax doctor -o json`; **app integrity** runs `codesign`, `spctl` and `stapler validate` against the running bundle. Notarization is decided by the stapled ticket, not by Gatekeeper's verdict — which means nothing on a Mac where assessment has been turned off.
 
 See [`CLAUDE.md`](CLAUDE.md) for the full architecture notes (file-by-file map, polling cadences, why we shell out to `kubectl` rather than using a native Swift Kubernetes client).
 

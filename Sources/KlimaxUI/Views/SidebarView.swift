@@ -97,7 +97,7 @@ struct SidebarView: View {
                             .font(.caption)
                             .foregroundStyle(.orange)
                     } else if model.unmanagedContainers.isEmpty {
-                        Text("No un-managed containers.")
+                        Text("No containers besides klimax's own.")
                             .font(.callout)
                             .foregroundStyle(.secondary)
                     } else {
@@ -116,7 +116,7 @@ struct SidebarView: View {
                     }
                 } header: {
                     HStack(spacing: 8) {
-                        Text("Containers")
+                        Text("Docker containers")
                             .font(.headline)
                             .textCase(nil)
                         if model.containersLoading {
@@ -125,7 +125,7 @@ struct SidebarView: View {
                         Spacer()
                     }
                     .padding(.bottom, 6)
-                    .help("Containers in the VM that klimax doesn't manage — the kind nodes and registry mirrors are excluded.")
+                    .help("Containers in the VM's Docker, other than klimax's own kind nodes and registry mirrors.")
                 }
             }
 

@@ -14,7 +14,12 @@ struct DockerContainer: Sendable, Hashable, Identifiable {
     let createdAt: Date?
     let command: String
     let networks: [String]
+    /// `docker ps`'s mount column: bind sources and volume ids, undifferentiated.
+    /// Present as a fallback; prefer `mountDetails` when it's populated.
     let mounts: [String]
+    /// Typed mounts from `docker inspect`, which `docker ps` can't express —
+    /// bind vs volume, source *and* destination, read-only or not.
+    let mountDetails: [MountDetail]
 
     /// The kind cluster this container is a node of, and its role. kind stamps
     /// every node container with these, which is how `kind get clusters` itself
@@ -37,15 +42,37 @@ struct DockerContainer: Sendable, Hashable, Identifiable {
     /// read from its own `{{.Label "…"}}` column.
     let labels: [String: String]
 
-    /// Same container with an exact label map swapped in.
-    func withLabels(_ labels: [String: String]) -> DockerContainer {
+    /// Same container with the exact label map and typed mounts swapped in.
+    func withInspected(labels: [String: String], mounts details: [MountDetail]) -> DockerContainer {
         DockerContainer(
             id: id, name: name, image: image, state: state, status: status,
             ports: ports, createdAt: createdAt, command: command,
-            networks: networks, mounts: mounts,
+            networks: networks, mounts: mounts, mountDetails: details,
             kindCluster: kindCluster, kindRole: kindRole, compose: compose,
             labels: labels
         )
+    }
+
+    /// One entry of `docker inspect`'s `.Mounts`.
+    struct MountDetail: Sendable, Hashable, Identifiable, Decodable {
+        let type: String
+        /// Path **in the guest** for a bind; the volume's data directory for a
+        /// volume. Docker resolves a bind source inside the VM, not on the Mac.
+        let source: String
+        let destination: String
+        let name: String?
+        let rw: Bool
+
+        var id: String { "\(type):\(source)->\(destination)" }
+        var isBind: Bool { type == "bind" }
+
+        enum CodingKeys: String, CodingKey {
+            case type = "Type"
+            case source = "Source"
+            case destination = "Destination"
+            case name = "Name"
+            case rw = "RW"
+        }
     }
 
     var shortID: String { String(id.prefix(12)) }
@@ -120,7 +147,7 @@ struct DockerContainer: Sendable, Hashable, Identifiable {
     }
 }
 
-/// Un-managed containers bucketed for display: one entry per compose project,
+/// The user's containers (everything but klimax's own) bucketed for display: one entry per compose project,
 /// then the containers that belong to no stack.
 struct ContainerGroup: Identifiable, Sendable, Hashable {
     /// Compose project name, or nil for the standalone bucket.

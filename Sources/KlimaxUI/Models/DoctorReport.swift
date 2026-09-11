@@ -52,6 +52,7 @@ struct DoctorCheck: Sendable, Hashable, Decodable, Identifiable {
         case "iptables": return "iptables no-NAT exemption"
         case "ip-forward": return "Guest IP forwarding"
         case "rosetta-vm": return "Rosetta 2 (VM)"
+        case "proxy": return "HTTP proxy"
         default: return id
         }
     }

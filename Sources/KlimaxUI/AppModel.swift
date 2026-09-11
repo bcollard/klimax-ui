@@ -49,6 +49,28 @@ final class AppModel {
     // Populated by the same node fetch that reads labels.
     var clusterNodeVersion: [String: String] = [:]
 
+    /// How a container's bind mount resolves, for the mount rows in its detail
+    /// view. Docker resolves a bind source *inside the guest*, so a source that
+    /// falls outside every shared directory is not the Mac's copy of that path:
+    /// dockerd created it empty in the VM and the container sees nothing.
+    enum MountBacking: Sendable, Hashable {
+        /// Reaches the Mac through this share.
+        case hostShare(KlimaxStatus.Mounts.Share)
+        /// Guest-only: the path exists in the VM, but not as your Mac's.
+        case guestOnly
+        /// A docker volume, or a path we can't judge — not a host bind at all.
+        case notApplicable
+        /// klimax is too old to report its mounts, so we must not guess.
+        case unknown
+    }
+
+    func backing(for mount: DockerContainer.MountDetail) -> MountBacking {
+        guard mount.isBind else { return .notApplicable }
+        guard let hostMounts else { return .unknown }
+        if let share = hostMounts.share(backing: mount.source) { return .hostShare(share) }
+        return .guestOnly
+    }
+
     /// Fleet a cluster belongs to (klimax.dev/fleet node label), if any.
     func fleet(of clusterName: String) -> String? {
         clusterLabels[clusterName]?["klimax.dev/fleet"]
@@ -109,12 +131,18 @@ final class AppModel {
 
     // Containers running in the guest VM, split into the ones klimax manages
     // (kind nodes, registry mirrors) and everything else. Fetched only while
-    // the "un-managed containers" preference is on.
+    // the "Docker containers" preference is on.
     var containers: [DockerContainer] = []
     var containersError: String?
     var containersLoading = false
     /// Tail of `docker logs` per container id, populated on demand.
     var containerLogs: [String: String] = [:]
+
+    // Host directories shared into the guest, from `klimax status`. This is the
+    // Lima instance's live list — not what config.yaml asks for — which is what
+    // makes it usable for deciding whether a container's bind actually reaches
+    // the Mac. nil when the klimax CLI predates the feature (0.1.59).
+    var hostMounts: KlimaxStatus.Mounts?
 
     // Registry mirror disk-usage measurements, keyed by mirror name.
     var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
@@ -427,6 +455,9 @@ final class AppModel {
         // Keep the CLI version current (it changes when the user upgrades klimax).
         if let v = try? await KlimaxCLI.version() { klimaxVersion = v }
         else if klimaxVersion == nil { klimaxVersion = "klimax (unknown)" }
+        // Mounts come from the Lima instance config, so this answers even for a
+        // stopped VM — which is exactly when someone checks whether an edit landed.
+        hostMounts = (try? await KlimaxCLI.status())?.mounts
         await refreshClusters()
         await refreshCurrentKubeContext()
         if let vm, vm.isRunning, let ssh = vm.ssh {

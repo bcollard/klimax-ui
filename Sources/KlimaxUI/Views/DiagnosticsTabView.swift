@@ -11,6 +11,7 @@ struct DiagnosticsTabView: View {
     var body: some View {
         Form {
             doctorSection
+            environmentSection
             integritySection
         }
         .formStyle(.grouped)
@@ -105,6 +106,78 @@ struct DiagnosticsTabView: View {
             .padding(.vertical, 1)
             .background(Capsule().fill(tint.opacity(0.18)))
             .foregroundStyle(tint)
+    }
+
+    // MARK: - Proxy and CA trust
+
+    /// The two settings that decide whether pulls work at all on a corporate
+    /// network, read from the klimax config. Both are invisible everywhere else
+    /// in the UI and both produce failures that look like something other than
+    /// what they are — a proxy-less pull hangs, an untrusted CA fails with
+    /// "certificate signed by unknown authority".
+    @ViewBuilder
+    private var environmentSection: some View {
+        Section {
+            LabeledContent("HTTP proxy") {
+                Text(proxyDescription)
+                    .font(.callout)
+                    .foregroundStyle(model.config?.network?.proxy?.isExplicit == true
+                                     ? AnyShapeStyle(.primary) : AnyShapeStyle(.secondary))
+                    .multilineTextAlignment(.trailing)
+            }
+            if let noProxy = model.config?.network?.proxy?.noProxy, !noProxy.isEmpty {
+                LabeledContent("Proxy exemptions") {
+                    Text(noProxy.joined(separator: ", "))
+                        .font(.caption.monospaced())
+                        .foregroundStyle(.secondary)
+                        .multilineTextAlignment(.trailing)
+                }
+            }
+            LabeledContent("Extra CA trust") {
+                Text(caCertsDescription)
+                    .font(.callout)
+                    .foregroundStyle(caCertFiles.isEmpty
+                                     ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .multilineTextAlignment(.trailing)
+            }
+            ForEach(caCertFiles, id: \.self) { file in
+                Text(file)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+        } header: {
+            Text("Network & trust")
+        } footer: {
+                Text("From your klimax config. klimax applies both to dockerd, the registry mirrors and every kind node — and computes the no-proxy list (bridge CIDR, cluster subnets, mirror names) itself, so cluster-internal traffic never goes to the proxy. An unset proxy still means macOS's own settings are inherited.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private var proxyDescription: String {
+        guard let proxy = model.config?.network?.proxy else {
+            return "inherited from macOS"
+        }
+        if proxy.isExplicit {
+            let http = proxy.http ?? ""
+            let https = proxy.https ?? ""
+            if !http.isEmpty, !https.isEmpty, http != https { return "\(http) / \(https)" }
+            return http.isEmpty ? https : http
+        }
+        return proxy.inheritsFromHost ? "inherited from macOS" : "none"
+    }
+
+    private var caCertFiles: [String] {
+        model.config?.vm.caCerts?.files ?? []
+    }
+
+    private var caCertsDescription: String {
+        let n = caCertFiles.count
+        if n == 0 { return "system roots only" }
+        return "\(n) extra CA\(n == 1 ? "" : "s")"
     }
 
     // MARK: - App integrity

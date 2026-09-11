@@ -30,8 +30,8 @@ struct SettingsView: View {
                         .foregroundStyle(.secondary)
                 }
                 Section {
-                    Toggle("Un-managed containers", isOn: $settings.showContainers)
-                    Text("Show containers running in the VM that klimax doesn't own — everything except the kind nodes and the registry mirrors. When off, the VM's docker is not queried.")
+                    Toggle("Docker containers", isOn: $settings.showContainers)
+                    Text("Show the containers you run in the VM's Docker — everything except klimax's own kind nodes and registry mirrors. When off, the VM's Docker is not queried.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

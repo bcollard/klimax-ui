@@ -96,6 +96,30 @@ enum KlimaxCLI {
         }
     }
 
+    /// Read `klimax status -o json`.
+    ///
+    /// The UI reads VM liveness and the cluster list from cheaper sources, so
+    /// this is called only for what has no filesystem equivalent — the mount
+    /// list, which comes from the Lima instance config and therefore answers
+    /// "what does the VM actually share" rather than "what does the config
+    /// file ask for". Costs one CLI invocation (~350 ms), so it rides
+    /// `refreshAll()` and never a poll loop.
+    ///
+    /// `mounts` is absent on klimax older than 0.1.59; the optional field
+    /// decodes to nil and the UI simply omits the section.
+    static func status() async throws -> KlimaxStatus {
+        let result = try await ProcessRunner.run(executable, ["status", "-o", "json"])
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let data = stdout.data(using: .utf8), !stdout.isEmpty else {
+            throw CLIError.command("status", result.exitCode, result.stderr)
+        }
+        do {
+            return try JSONDecoder().decode(KlimaxStatus.self, from: data)
+        } catch {
+            throw CLIError.decode(error.localizedDescription)
+        }
+    }
+
     /// Return klimax version string, e.g. "klimax 0.1.25".
     static func version() async throws -> String {
         let result = try await ProcessRunner.run(executable, ["version"])

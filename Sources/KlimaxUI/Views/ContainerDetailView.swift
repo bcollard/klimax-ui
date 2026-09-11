@@ -25,7 +25,7 @@ struct ContainerDetailView: View {
                 configCard
                 if !container.ports.isEmpty { portsCard }
                 if !container.labels.isEmpty { labelsCard }
-                if !container.mounts.isEmpty { mountsCard }
+                if !container.mountDetails.isEmpty || !container.mounts.isEmpty { mountsCard }
                 logsCard
                 if let rec = model.latestLog(for: .container(container.id)) {
                     LogConsoleView(title: "Last action", text: rec.text, maxHeight: 160)
@@ -268,20 +268,101 @@ struct ContainerDetailView: View {
         }
     }
 
+    /// Mounts, with each bind judged against the directories the VM actually
+    /// shares from the Mac.
+    ///
+    /// This is the one thing the app can tell you that `docker inspect` cannot:
+    /// docker resolves a bind source *inside the guest*, so binding a host path
+    /// klimax doesn't share doesn't fail — dockerd creates it empty in the VM
+    /// and the container quietly sees nothing. That is the failure `vm.mounts`
+    /// exists to prevent, and it is invisible from inside the container.
     private var mountsCard: some View {
         GroupBox("Mounts") {
-            VStack(alignment: .leading, spacing: 4) {
-                ForEach(container.mounts, id: \.self) { mount in
-                    Text(mount)
-                        .font(.caption.monospaced())
-                        .foregroundStyle(.secondary)
-                        .textSelection(.enabled)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
+            VStack(alignment: .leading, spacing: 8) {
+                if container.mountDetails.isEmpty {
+                    // Pre-inspect fallback: the flat ps column, untyped.
+                    ForEach(container.mounts, id: \.self) { mount in
+                        Text(mount)
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                } else {
+                    ForEach(container.mountDetails) { mount in
+                        mountRow(mount)
+                    }
                 }
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    @ViewBuilder
+    private func mountRow(_ mount: DockerContainer.MountDetail) -> some View {
+        let backing = model.backing(for: mount)
+        VStack(alignment: .leading, spacing: 2) {
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Image(systemName: mount.isBind ? "externaldrive.connected.to.line.below" : "internaldrive")
+                    .font(.caption)
+                    .foregroundStyle(tint(for: backing))
+                Text(mount.destination)
+                    .font(.system(.body, design: .monospaced))
+                    .textSelection(.enabled)
+                Text(mount.rw ? "rw" : "ro")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 4)
+                    .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                Spacer()
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 4) {
+                Text("←")
+                    .foregroundStyle(.tertiary)
+                Text(mount.name ?? mount.source)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            .padding(.leading, 18)
+            backingNote(backing)
+                .padding(.leading, 18)
+        }
+    }
+
+    @ViewBuilder
+    private func backingNote(_ backing: AppModel.MountBacking) -> some View {
+        switch backing {
+        case .hostShare(let share):
+            Label(
+                "on your Mac\(share.writable ? "" : " (share is read-only)")",
+                systemImage: "checkmark.circle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(share.writable ? Color.green : Color.orange)
+            .help("Backed by the VM share \(share.hostPath)")
+        case .guestOnly:
+            Label(
+                "not shared from your Mac — this path exists only inside the VM",
+                systemImage: "exclamationmark.triangle.fill"
+            )
+            .font(.caption)
+            .foregroundStyle(.orange)
+            .help("Docker resolves a bind source inside the guest. Add the directory to vm.mounts in your klimax config and run `klimax up` to share it.")
+        case .notApplicable, .unknown:
+            EmptyView()
+        }
+    }
+
+    private func tint(for backing: AppModel.MountBacking) -> Color {
+        switch backing {
+        case .hostShare(let share): return share.writable ? .green : .orange
+        case .guestOnly: return .orange
+        case .notApplicable, .unknown: return .secondary
         }
     }
 

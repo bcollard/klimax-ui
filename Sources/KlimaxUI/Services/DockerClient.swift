@@ -40,21 +40,25 @@ struct DockerClient: Sendable {
     /// substring of any container id, image ref, or JSON we parse.
     private static let sectionMarker = "@@KLIMAX-LABELS@@"
 
-    /// Lossless label map per container, for display. `docker ps`'s `{{.Labels}}`
-    /// column can't be trusted (see `psFormat`), so labels are re-read as JSON
-    /// from `docker inspect`. It rides the *same* SSH round-trip — the network
-    /// hop is the expensive part, not the second local docker call.
-    private static let inspectLabels =
-        "docker ps -aq --no-trunc | xargs -r docker inspect --format '{{.Id}}\t{{json .Config.Labels}}'"
+    /// Per-container detail that `docker ps` can't express, as JSON.
+    ///
+    /// Labels because `{{.Labels}}` can't be trusted (see `psFormat`), mounts
+    /// because the `{{.Mounts}}` column flattens binds and volumes into one
+    /// undifferentiated list with no destination. It rides the *same* SSH
+    /// round-trip — the network hop is the expensive part, not the second
+    /// local docker call.
+    private static let inspectDetail =
+        "docker ps -aq --no-trunc | xargs -r docker inspect"
+        + " --format '{{.Id}}\t{{json .Config.Labels}}\t{{json .Mounts}}'"
 
     /// Every container in the VM, running or not.
     func list() async throws -> [DockerContainer] {
         let out = try await guest.run(
             "docker ps -a --no-trunc --format '\(Self.psFormat)'"
-            + "; echo '\(Self.sectionMarker)'; \(Self.inspectLabels) 2>/dev/null"
+            + "; echo '\(Self.sectionMarker)'; \(Self.inspectDetail) 2>/dev/null"
         )
         let sections = out.components(separatedBy: Self.sectionMarker)
-        let labelsByID = sections.count > 1 ? Self.parseInspectLabels(sections[1]) : [:]
+        let detail = sections.count > 1 ? Self.parseInspectDetail(sections[1]) : [:]
         return sections[0]
             .split(whereSeparator: \.isNewline)
             .compactMap { Self.parse(String($0)) }
@@ -62,22 +66,28 @@ struct DockerClient: Sendable {
                 // Behavior never depends on this: if the inspect pass failed,
                 // the container keeps its (imperfect) ps-derived label map and
                 // every classification still works off the dedicated columns.
-                guard let exact = labelsByID[container.id] else { return container }
-                return container.withLabels(exact)
+                guard let d = detail[container.id] else { return container }
+                return container.withInspected(labels: d.labels, mounts: d.mounts)
             }
     }
 
-    /// `<64-char id>\t<labels JSON>` per line.
-    static func parseInspectLabels(_ block: String) -> [String: [String: String]] {
-        var out: [String: [String: String]] = [:]
+    /// `<64-char id>\t<labels JSON>\t<mounts JSON>` per line.
+    static func parseInspectDetail(
+        _ block: String
+    ) -> [String: (labels: [String: String], mounts: [DockerContainer.MountDetail])] {
+        var out: [String: (labels: [String: String], mounts: [DockerContainer.MountDetail])] = [:]
+        let decoder = JSONDecoder()
         for line in block.split(whereSeparator: \.isNewline) {
             let parts = line.components(separatedBy: "\t")
-            guard parts.count == 2, !parts[0].isEmpty,
-                  let data = parts[1].data(using: .utf8),
-                  // `null` decodes to nil labels for a container with none.
-                  let map = try? JSONDecoder().decode([String: String]?.self, from: data)
-            else { continue }
-            out[parts[0]] = map ?? [:]
+            guard parts.count == 3, !parts[0].isEmpty else { continue }
+            // `null` decodes to nil for a container with no labels / no mounts.
+            let labels = parts[1].data(using: .utf8).flatMap {
+                try? decoder.decode([String: String]?.self, from: $0)
+            } ?? [:]
+            let mounts = parts[2].data(using: .utf8).flatMap {
+                try? decoder.decode([DockerContainer.MountDetail]?.self, from: $0)
+            } ?? []
+            out[parts[0]] = (labels, mounts)
         }
         return out
     }
@@ -115,6 +125,8 @@ struct DockerClient: Sendable {
             command: f[7].trimmingCharacters(in: CharacterSet(charactersIn: "\"")),
             networks: splitList(f[8]),
             mounts: splitList(f[9]),
+            // Filled in by the inspect pass; the ps column is the fallback.
+            mountDetails: [],
             kindCluster: label(10),
             kindRole: label(11),
             compose: label(12).map { project in

@@ -43,6 +43,9 @@ struct OverviewDetailView: View {
                 if settings.showVMStats, model.vm?.isRunning == true {
                     VMChartsView(model: model)
                 }
+                if let mounts = model.hostMounts, !mounts.shares.isEmpty {
+                    hostMountsSection(mounts)
+                }
                 if let rec = model.latestLog(forAny: [.vm, .general]) {
                     LogConsoleView(title: "Last action", text: rec.text, maxHeight: 200)
                 }
@@ -181,7 +184,7 @@ struct OverviewDetailView: View {
     private var containersSection: some View {
         VStack(alignment: .leading, spacing: 10) {
             sectionHeader(
-                title: "Containers",
+                title: "Docker containers",
                 count: model.unmanagedContainers.count,
                 trailing: AnyView(
                     HStack(spacing: 8) {
@@ -204,7 +207,7 @@ struct OverviewDetailView: View {
             } else if let error = model.containersError {
                 emptyCard(error)
             } else if model.unmanagedContainers.isEmpty {
-                emptyCard("No un-managed containers. The kind nodes and registry mirrors klimax runs are listed above, not here.")
+                emptyCard("No containers besides klimax's own.")
             } else {
                 VStack(alignment: .leading, spacing: 14) {
                     ForEach(model.containerGroups) { group in
@@ -252,6 +255,78 @@ struct OverviewDetailView: View {
             Spacer()
         }
         .help("docker compose project \"\(group.title)\"")
+    }
+
+    // MARK: - Host mounts
+
+    /// What the VM can see of the Mac. Worth its own section because it is the
+    /// precondition for `docker run -v <host path>` resolving to anything: a
+    /// bind outside these directories doesn't fail, it silently gets an empty
+    /// directory created inside the guest.
+    private func hostMountsSection(_ mounts: KlimaxStatus.Mounts) -> some View {
+        let user = mounts.shares.filter { !$0.isKlimaxInternal }
+        // klimax's own registry-cache share goes last and greyed: it is real
+        // (a bind into it genuinely reaches the Mac) but it's plumbing, not
+        // something the user configured.
+        let ordered = user + mounts.shares.filter(\.isKlimaxInternal)
+        return VStack(alignment: .leading, spacing: 10) {
+            sectionHeader(
+                title: "Volume mounts",
+                count: user.count,
+                trailing: mounts.pendingRestart ? AnyView(pendingRestartBadge) : nil
+            )
+            VStack(alignment: .leading, spacing: 0) {
+                ForEach(ordered) { share in
+                    HStack(alignment: .firstTextBaseline, spacing: 8) {
+                        Image(systemName: share.isKlimaxInternal ? "shippingbox" : "folder")
+                            .font(.caption)
+                            .foregroundStyle(share.isKlimaxInternal ? AnyShapeStyle(.tertiary) : AnyShapeStyle(Color.accentColor))
+                        Text(prettyPath(share.hostPath))
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                        if share.guestPath != share.hostPath {
+                            Text("→ \(share.guestPath)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                        pill(share.writable ? "writable" : "read-only")
+                        if share.isKlimaxInternal {
+                            Text("klimax")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 6)
+                    .opacity(share.isKlimaxInternal ? 0.45 : 1)
+                    .help(share.isKlimaxInternal ? "Shared by klimax itself, for the registry mirror cache" : "")
+                    if share.id != ordered.last?.id { Divider() }
+                }
+            }
+            .padding(.horizontal, 14)
+            .padding(.vertical, 4)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(
+                RoundedRectangle(cornerRadius: 10).fill(Color.secondary.opacity(0.06))
+            )
+            Text("Only these directories resolve for a `docker run -v <host path>`. Anything else is created empty inside the VM — the container starts, and sees nothing.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var pendingRestartBadge: AnyView {
+        AnyView(
+            Label("restart pending", systemImage: "exclamationmark.arrow.circlepath")
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.orange)
+                .help("vm.mounts in your klimax config no longer matches what the VM has. Run `klimax up` to apply it — it will offer to restart the VM.")
+        )
     }
 
     // MARK: - Bits

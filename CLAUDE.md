@@ -44,6 +44,7 @@ klimax-ui/
 │   │   ├── AppSettings.swift           # @Observable prefs (visibility + poll cadences), UserDefaults-backed
 │   │   ├── LogRecord.swift             # LogScope enum + LogRecord for scoped action logs
 │   │   ├── DoctorReport.swift          # decodes `klimax doctor -o json` (stable check ids)
+│   │   ├── KlimaxStatus.swift         # decodes `klimax status -o json` — VM host mounts
 │   │   ├── DockerContainer.swift       # guest container, compose membership, classification
 │   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | .container(id) | nil
 │   ├── Services/
@@ -51,7 +52,7 @@ klimax-ui/
 │   │   ├── SSHConfigParser.swift       # hand-parses OpenSSH config from ssh.config
 │   │   ├── GuestSSH.swift              # ssh -F shell-out; reads /proc/stat, /proc/meminfo
 │   │   ├── ProcessRunner.swift         # async Process wrapper with PATH search
-│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list -o json`, up/down, create/delete, doctor
+│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list/status/doctor -o json`, up/down, create/delete
 │   │   ├── KubeClient.swift            # kubectl shell-out: nodes/pods/services/deployments
 │   │   ├── Helm.swift                  # helm repo add/update/install metrics-server
 │   │   ├── DockerClient.swift          # guest `docker ps`(+inspect labels)/logs/lifecycle over GuestSSH
@@ -72,7 +73,7 @@ klimax-ui/
 │   │   ├── VMChartsView.swift          # VM CPU%/mem charts (Swift Charts + hover tooltips)
 │   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility/Refresh/Diagnostics/About
 │   │   ├── DiagnosticsTabView.swift    # klimax doctor checks + app integrity block
-│   │   ├── ContainerDetailView.swift   # un-managed container: compose stack, ports, labels, logs, lifecycle
+│   │   ├── ContainerDetailView.swift   # user's container: compose stack, ports, labels, logs, lifecycle
 │   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
 │   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
 │   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
@@ -144,8 +145,10 @@ sentinel, and parses it into `DockerContainer`:
 
 1. `docker ps -a --no-trunc --format …` — **tab**-separated, because `.Ports`,
    `.Networks`, `.Mounts` and `.Labels` are themselves comma-joined.
-2. `docker ps -aq | xargs -r docker inspect --format '{{.Id}}\t{{json .Config.Labels}}'`
-   — the label map as JSON.
+2. `docker ps -aq | xargs -r docker inspect --format '{{.Id}}\t{{json .Config.Labels}}\t{{json .Mounts}}'`
+   — the label map and the typed mount list as JSON. Mounts come from here because the
+   `{{.Mounts}}` ps column flattens binds and volumes into one undifferentiated list with
+   no destination and no read-only flag.
 
 Both ride the same SSH round-trip; the network hop is the cost, not the second local
 docker call.
@@ -172,7 +175,7 @@ Classification (`DockerContainer.managed(mirrorNames:)`) decides what klimax own
   signal; a `registry-*` name on a `registry:<tag>` image is the fallback for a config
   that has drifted from what is actually running.
 
-Everything else is "un-managed" and surfaces in the sidebar/overview/detail views when
+Everything else is the user's own and surfaces as **Docker containers** in the sidebar/overview/detail views when
 `AppSettings.showContainers` is on. When it's off nothing queries the guest's docker at
 all. Published ports are linked at the VM's **lima0** address, not `127.0.0.1`: klimax
 sets `network.disablePortMirroring`, so Lima's loopback mirroring is off and lima0 is
@@ -180,7 +183,7 @@ the only address that works from the host.
 
 #### Compose stacks
 
-Un-managed containers are bucketed by `com.docker.compose.project` into
+Docker containers are bucketed by `com.docker.compose.project` into
 `AppModel.containerGroups` — stacks first (alphabetically, members ordered by service
 then replica), standalone containers last. A stack is a unit the user thinks about as a
 whole, so five flat `myapp-worker-{1..5}` rows next to an unrelated container hide the
@@ -210,6 +213,40 @@ Compose labels read (all verified against a live stack, Compose v5.5.1):
 and an on-demand `docker logs --tail N`. Deliberately **no `docker rm`** — removal is
 unrecoverable and these containers aren't klimax's to destroy.
 
+### Host mounts — `klimax status -o json`
+
+klimax 0.1.59 added `vm.mounts`: host directories shared into the guest over virtiofs.
+This matters more than it sounds, and it is the one place the UI can tell the user
+something neither `docker` nor `kubectl` will:
+
+> Docker runs **inside** the VM and resolves a bind-mount source **there**. Binding a host
+> path klimax doesn't share does **not** fail — dockerd creates the missing directory in
+> the guest and the container sees an empty one. The container starts, reports healthy,
+> and silently has none of your files.
+
+`KlimaxCLI.status()` decodes `klimax status -o json` for `mounts.shares` and
+`mounts.pendingRestart`. Deliberately this and not `config.yaml`: klimax reads the share
+list from the **Lima instance config**, so it answers "what does the VM actually have"
+rather than "what will it have after the next restart" — and `pendingRestart` is klimax
+telling us the two disagree. It costs one CLI invocation (~350 ms), so it rides
+`refreshAll()` and never a poll loop. `mounts` is absent on older klimax; the optional
+decodes to nil and the UI omits the section rather than guessing.
+
+The overview titles this section **Volume mounts** and lists klimax's own registry-cache
+share last and greyed out: it is a real share — a bind into it does reach the Mac, so it
+stays in the data the backing check uses — but it is plumbing the user never configured,
+so the count above it only counts theirs.
+
+`AppModel.backing(for:)` resolves each container bind against that list —
+`.hostShare` / `.guestOnly` / `.notApplicable` (a volume) / `.unknown` (klimax too old to
+say, so we must not claim either way). The prefix test appends a `/` before comparing, so
+a share of `/Users/me/projects` does not falsely claim `/Users/me/projectsX`. The
+comparison is against `guestPath`, not `hostPath`, because a remapped `mountPoint` is what
+docker actually resolves against.
+
+The container detail view renders that per mount: green "on your Mac", orange "not shared
+from your Mac — this path exists only inside the VM", nothing for a volume.
+
 ### Diagnostics — `klimax doctor` and the app's own signature
 
 The Settings window's **Diagnostics** tab answers two unrelated questions.
@@ -221,6 +258,12 @@ is polled — the probes (route table, in-guest iptables, Rosetta) are far too h
 loop. `--fix` repairs the route / iptables / IP-forwarding checks itself, but the route fix
 shells to `sudo`; launched from an app bundle there is no controlling terminal, so sudo
 fails fast with "no tty present" and the UI surfaces that plus a copyable command.
+
+The tab's **Network & trust** section reads `network.proxy` and `vm.caCerts` from the
+klimax config (0.1.60+). Both are invisible everywhere else and both fail in ways that
+look like something else — a proxy-less pull hangs, an untrusted CA fails with "certificate
+signed by unknown authority". An **absent** proxy block is not "no proxy": klimax inherits
+macOS's system settings, so the UI says "inherited from macOS" rather than "none".
 
 `CodeSignatureCheck` verifies the *running* bundle with `codesign --verify`, `codesign
 -dvvv` (the `-dvvv` is what makes it print the `Authority=` chain at all), `spctl -a -vv`,
@@ -266,7 +309,7 @@ Selection state lives in `AppModel.selection: SidebarSelection?` and drives both
 
 ## Key design decisions
 
-### Un-managed containers are a separate concept from clusters
+### "Docker containers" are a separate concept from clusters
 
 kind nodes and registry mirrors already have first-class places in the UI (the Clusters
 and Registry mirrors sections). The Containers section is deliberately *everything else* —

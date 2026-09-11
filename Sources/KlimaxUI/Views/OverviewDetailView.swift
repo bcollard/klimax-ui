@@ -8,6 +8,7 @@ struct OverviewDetailView: View {
     @Environment(AppSettings.self) private var settings
     @State private var showNewClusterSheet = false
     @State private var showDeleteAllConfirm = false
+    @State private var groupPendingRemoval: ContainerGroup?
 
     private var clustersHeaderTrailing: AnyView {
         AnyView(
@@ -67,6 +68,23 @@ struct OverviewDetailView: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("This tears down every kind cluster in the VM. This cannot be undone.")
+        }
+        .confirmationDialog(
+            groupPendingRemoval.map { "Remove stack \"\($0.title)\"?" } ?? "",
+            isPresented: Binding(
+                get: { groupPendingRemoval != nil },
+                set: { if !$0 { groupPendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let group = groupPendingRemoval {
+                Button("Remove \(group.containers.count) container\(group.containers.count == 1 ? "" : "s")", role: .destructive) {
+                    Task { await model.performStackRemoval(group) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This force-removes every container in the stack, running or not. This cannot be undone.")
         }
     }
 
@@ -272,6 +290,13 @@ struct OverviewDetailView: View {
                 .controlSize(.small)
                 .disabled(group.runningCount == group.containers.count)
                 .help("Start every container in this stack")
+                Button(role: .destructive) {
+                    groupPendingRemoval = group
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .controlSize(.small)
+                .help("Remove every container in this stack — cannot be undone")
             }
         }
         .help("docker compose project \"\(group.title)\"")

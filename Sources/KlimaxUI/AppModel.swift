@@ -1086,6 +1086,33 @@ final class AppModel {
         await refreshContainers()
     }
 
+    /// Force-remove every container in a compose stack. Not `docker compose
+    /// down` — that walks into the same orphan-sweep failure mode as `up` (see
+    /// CLAUDE.md) — but plain `docker rm -f` against the stack's own ids.
+    ///
+    /// This exists because a stack's containers can outlive its compose
+    /// metadata: `docker compose ls` stops recognizing a stack once its
+    /// compose file or working directory is gone, or it was launched from a
+    /// different machine/context against this VM's docker socket, while the
+    /// containers themselves keep showing up in `docker ps` forever. The view
+    /// gates the call behind a confirmation dialog — this is irreversible.
+    func performStackRemoval(_ group: ContainerGroup) async {
+        guard let docker, inFlightAction == nil, !group.isStandalone else { return }
+        let ids = group.containers.map(\.id)
+        let label = "Removing stack \(group.title)"
+        inFlightAction = label
+        defer { inFlightAction = nil }
+        let text: String
+        do {
+            let out = try await docker.remove(ids: ids)
+            text = "\(label) — ok\n\(out)"
+        } catch {
+            text = "\(label) failed: \(error.localizedDescription)"
+        }
+        appendLog(scope: .composeStack(group.title), label: label, text: text)
+        await refreshContainers()
+    }
+
     private func runAction(_ label: String, scope: LogScope, _ work: () async throws -> ProcessResult) async {
         inFlightAction = label
         creation = nil  // a new action supersedes any finished create session

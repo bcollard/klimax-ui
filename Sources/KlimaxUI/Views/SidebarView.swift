@@ -8,6 +8,7 @@ struct SidebarView: View {
     @State private var newClusterName = ""
     @State private var mirrorsExpanded = true
     @State private var containersExpanded = true
+    @State private var groupPendingRemoval: ContainerGroup?
 
     var body: some View {
         List(selection: $model.selection) {
@@ -106,7 +107,9 @@ struct SidebarView: View {
                             // containers would just be a header over a list of
                             // unrelated things.
                             if !group.isStandalone {
-                                ComposeGroupHeader(model: model, group: group)
+                                ComposeGroupHeader(model: model, group: group) {
+                                    groupPendingRemoval = group
+                                }
                             }
                             ForEach(group.containers) { c in
                                 ContainerRow(container: c, indented: !group.isStandalone)
@@ -160,6 +163,23 @@ struct SidebarView: View {
         .listStyle(.sidebar)
         .sheet(isPresented: $showNewClusterSheet) {
             NewClusterSheet(model: model, isPresented: $showNewClusterSheet)
+        }
+        .confirmationDialog(
+            groupPendingRemoval.map { "Remove stack \"\($0.title)\"?" } ?? "",
+            isPresented: Binding(
+                get: { groupPendingRemoval != nil },
+                set: { if !$0 { groupPendingRemoval = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let group = groupPendingRemoval {
+                Button("Remove \(group.containers.count) container\(group.containers.count == 1 ? "" : "s")", role: .destructive) {
+                    Task { await model.performStackRemoval(group) }
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This force-removes every container in the stack, running or not. This cannot be undone.")
         }
     }
 
@@ -282,6 +302,7 @@ private struct MirrorRow: View {
 private struct ComposeGroupHeader: View {
     @Bindable var model: AppModel
     let group: ContainerGroup
+    let onRequestRemoval: () -> Void
 
     private var allRunning: Bool { group.runningCount == group.containers.count }
     private var allStopped: Bool { group.runningCount == 0 }
@@ -318,6 +339,14 @@ private struct ComposeGroupHeader: View {
                 .buttonStyle(.plain)
                 .disabled(allRunning)
                 .help("Start every container in this stack")
+                Button(role: .destructive) {
+                    onRequestRemoval()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .help("Remove every container in this stack — cannot be undone")
             }
         }
         .font(.caption2)

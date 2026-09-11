@@ -120,6 +120,14 @@ struct DockerClient: Sendable {
         try await guest.run("docker stop \(ids.joined(separator: " "))")
     }
 
+    /// Force-remove every container of a compose stack — `-f` stops a running
+    /// container before removing it, so this is the whole `stop` + `rm` in one
+    /// call. The final, irreversible half of the stack lifecycle; the UI gates
+    /// it behind a confirmation dialog.
+    func remove(ids: [String]) async throws -> String {
+        try await guest.run("docker rm -f \(ids.joined(separator: " "))")
+    }
+
     // MARK: - Parsing
 
     static func parse(_ line: String) -> DockerContainer? {

@@ -210,8 +210,21 @@ Compose labels read (all verified against a live stack, Compose v5.5.1):
 > produces identical labels with no orphan sweep.
 
 `ContainerDetailView` offers start / stop / restart (logged under `LogScope.container(id)`)
-and an on-demand `docker logs --tail N`. Deliberately **no `docker rm`** — removal is
-unrecoverable and these containers aren't klimax's to destroy.
+and an on-demand `docker logs --tail N`. Deliberately **no `docker rm`** on a single
+container — removal is unrecoverable and one container isn't klimax's to destroy out
+from under the rest of its stack.
+
+The stack as a whole gets Start/Stop/Remove next to its name in the sidebar and overview
+(`AppModel.performStackAction` / `performStackRemoval`, logged under
+`LogScope.composeStack(project)`). All three are `docker start`/`stop`/`rm -f` against the
+stack's own container ids, never the real `docker compose up`/`down` — see the orphan-sweep
+warning above; `docker compose down` would walk into the same failure mode as `up`. Remove
+is gated behind a confirmation dialog (`ContainerGroup`-keyed `@State`, one per view) since
+it's the one irreversible action here. It exists because a stack's containers can outlive
+its compose metadata — `docker compose ls` stops recognizing a stack once its compose file
+or working directory is gone (or was launched from a different machine/context against this
+VM's docker socket), while the containers themselves keep showing up in `docker ps` forever;
+this is the only way to clear those out from the app.
 
 ### Host mounts — `klimax status -o json`
 

@@ -106,6 +106,27 @@ We **bypass the klimax CLI for state-reads** wherever possible — every CLI inv
 
 Poll cadence: user-configurable, default 5 s (`AppSettings.vmPollSeconds`; read live off `settings.vmPollInterval` at the top of each loop). Skipped entirely when the "VM stats & graphs" preference is off.
 
+#### Disk usage — root disk and the image-cache disk
+
+klimax gives the VM two independently-resizable disks (`lima.yaml`: `disk` for the root
+filesystem, `additionalDisks: [klimax-img]` mounted at `/var/lib/containerd`) — everything
+`docker pull`/`build` writes lands on the second one, separately from the root disk. A full
+one can't be seen from `df` on the Mac (it's inside the VM) and fails in a way that looks
+like anything else — a `docker compose up --build` dying mid-export with "no space left on
+device" gives no hint which of the two disks is actually full, or that there even are two.
+
+`GuestSSH.stats()` (not the 5 s poll loop — this rides `refreshAll()`, same cadence as
+kernel/OS info) adds one more section to its single round-trip: `df -k
+--output=source,size,used,avail / /var/lib/containerd`. The two paths are always passed in
+that fixed order, so the parser reads them positionally rather than matching the `target`
+column. `imageDisk` is only populated when its device differs from the root's — an older
+klimax without the `additionalDisks` split reports the same filesystem for both paths, and
+showing two identical bars would be misleading rather than informative.
+
+The sidebar VM card renders both as "used / total GiB", colored by fraction full — 80%/95%
+warn/crit thresholds, higher than memory's 70%/90%, because disks routinely run hotter than
+RAM without that meaning anything.
+
 ### Kubernetes — `kubectl` shell-out
 
 We shell to `kubectl --kubeconfig <path>` rather than embedding a Swift Kubernetes client because:

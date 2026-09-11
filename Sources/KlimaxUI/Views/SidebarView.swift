@@ -441,7 +441,14 @@ private struct VMCard: View {
                         VStack(alignment: .leading, spacing: 4) {
                             metaRow("CPUs", vm.lima?.cpus.map(String.init) ?? "—")
                             metaRow("Memory", vm.lima?.memory ?? "—")
-                            metaRow("Disk", vm.lima?.disk ?? "—")
+                            if settings.showVMStats, let disk = model.guestStats?.rootDisk {
+                                diskRow("Disk", disk)
+                            } else {
+                                metaRow("Disk", vm.lima?.disk ?? "—")
+                            }
+                            if settings.showVMStats, let images = model.guestStats?.imageDisk {
+                                diskRow("Images", images)
+                            }
                             if settings.showVMStats, let loadAvg = model.guestStats?.loadAvg {
                                 let parts = Array(loadAvg.split(separator: " ").prefix(3))
                                 HStack {
@@ -558,6 +565,31 @@ private struct VMCard: View {
         if ratio >= crit { return .red }
         if ratio >= warn { return .orange }
         return .green
+    }
+
+    /// A disk usage row in the same "used / total" style as the Memory row,
+    /// colored by fraction full. Thresholds sit higher than memory's (80/95%
+    /// vs 70/90%) — disks routinely run hotter than RAM without it meaning
+    /// anything, so the warning should reserve itself for genuinely tight space.
+    private func diskRow(_ label: String, _ disk: GuestSSH.DiskUsage) -> some View {
+        let usedGiB = Double(disk.usedKB) / 1024 / 1024
+        let totalGiB = Double(disk.totalKB) / 1024 / 1024
+        let ratio = disk.totalKB > 0 ? Double(disk.usedKB) / Double(disk.totalKB) : 0
+        return HStack {
+            Text(label)
+                .foregroundStyle(.secondary)
+                .font(.caption)
+            Spacer()
+            (
+                Text(String(format: "%.1f", usedGiB))
+                    .foregroundColor(usageColor(ratio, warn: 0.8, crit: 0.95))
+                + Text(String(format: " / %.1f GiB", totalGiB))
+                    .foregroundColor(.secondary)
+            )
+            .font(.caption.monospacedDigit())
+            .textSelection(.enabled)
+        }
+        .help("\(disk.device) — \(Int((ratio * 100).rounded()))% used")
     }
 
     /// Tooltip breaking the load average into its 1/5/15-minute components,

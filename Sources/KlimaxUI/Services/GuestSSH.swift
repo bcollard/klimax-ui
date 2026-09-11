@@ -40,6 +40,14 @@ struct GuestSSH: Sendable {
         return trimmed.isEmpty ? nil : trimmed
     }
 
+    /// One filesystem's usage, as reported by `df -k`.
+    struct DiskUsage: Sendable, Hashable {
+        let device: String
+        let totalKB: Int
+        let usedKB: Int
+        let availKB: Int
+    }
+
     /// Snapshot of basic guest stats. All fields are best-effort.
     struct GuestStats: Sendable, Hashable {
         let uptime: String?
@@ -49,6 +57,14 @@ struct GuestSSH: Sendable {
         let kernel: String?
         /// `PRETTY_NAME` from /etc/os-release, e.g. "Ubuntu 26.04 LTS".
         let osName: String?
+        /// The VM's root disk (`/`).
+        let rootDisk: DiskUsage?
+        /// klimax's persistent image-cache disk, mounted at `/var/lib/containerd`
+        /// (see `additionalDisks` in lima.yaml) — everything `docker pull`/`build`
+        /// writes lives here, separately from the root disk. `nil` when it isn't
+        /// actually a distinct filesystem (older klimax without the split, or the
+        /// mount hasn't landed yet), so the UI doesn't show two identical bars.
+        let imageDisk: DiskUsage?
     }
 
     /// Single-shot reading of CPU counters and memory totals for time-series
@@ -129,11 +145,13 @@ struct GuestSSH: Sendable {
         // lifetime of the app.
         let empty = GuestStats(
             uptime: nil, loadAvg: nil, memTotalKB: nil,
-            memAvailableKB: nil, kernel: nil, osName: nil
+            memAvailableKB: nil, kernel: nil, osName: nil,
+            rootDisk: nil, imageDisk: nil
         )
         guard let out = try? await run(
             "uptime -p; echo ---; cat /proc/loadavg; echo ---; head -3 /proc/meminfo; echo ---; "
             + Self.osCommand
+            + "; echo ---; df -k --output=source,size,used,avail / /var/lib/containerd 2>/dev/null || true"
         ) else { return empty }
 
         let sections = out.components(separatedBy: "---")
@@ -145,14 +163,37 @@ struct GuestSSH: Sendable {
 
         let (memTotal, memAvail) = parseMemInfo(section(2) ?? "")
         let osLines = Self.nonEmptyLines(section(3) ?? "")
+        let (rootDisk, imageDisk) = parseDiskUsage(section(4) ?? "")
         return GuestStats(
             uptime: section(0),
             loadAvg: section(1),
             memTotalKB: memTotal,
             memAvailableKB: memAvail,
             kernel: osLines.first,
-            osName: osLines.count >= 2 ? osLines[1] : nil
+            osName: osLines.count >= 2 ? osLines[1] : nil,
+            rootDisk: rootDisk,
+            imageDisk: imageDisk
         )
+    }
+
+    /// `df -k --output=source,size,used,avail / /var/lib/containerd`: a header
+    /// line, then one data line per path in the order passed. The image disk
+    /// is only reported when its device differs from the root's — otherwise
+    /// `/var/lib/containerd` is just a directory on the root filesystem (older
+    /// klimax without the `additionalDisks` split), and showing two identical
+    /// bars would be misleading rather than informative.
+    private func parseDiskUsage(_ block: String) -> (root: DiskUsage?, image: DiskUsage?) {
+        func parse(_ line: String) -> DiskUsage? {
+            let f = line.split(whereSeparator: \.isWhitespace)
+            guard f.count >= 4,
+                  let total = Int(f[1]), let used = Int(f[2]), let avail = Int(f[3])
+            else { return nil }
+            return DiskUsage(device: String(f[0]), totalKB: total, usedKB: used, availKB: avail)
+        }
+        let rows = Self.nonEmptyLines(block).dropFirst().compactMap(parse)
+        guard let root = rows.first else { return (nil, nil) }
+        guard rows.count >= 2, rows[1].device != root.device else { return (root, nil) }
+        return (root, rows[1])
     }
 
     private func parseKB(_ line: String) -> Int? {

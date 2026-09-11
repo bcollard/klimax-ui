@@ -412,7 +412,9 @@ final class AppModel {
             memTotalKB: raw.memTotalKB,
             memAvailableKB: raw.memAvailableKB,
             kernel: guestStats?.kernel,
-            osName: guestStats?.osName
+            osName: guestStats?.osName,
+            rootDisk: guestStats?.rootDisk,
+            imageDisk: guestStats?.imageDisk
         )
 
         await backfillGuestOSInfo(guest: guest)
@@ -437,7 +439,9 @@ final class AppModel {
             memTotalKB: guestStats?.memTotalKB,
             memAvailableKB: guestStats?.memAvailableKB,
             kernel: info.kernel,
-            osName: info.osName ?? guestStats?.osName
+            osName: info.osName ?? guestStats?.osName,
+            rootDisk: guestStats?.rootDisk,
+            imageDisk: guestStats?.imageDisk
         )
     }
 

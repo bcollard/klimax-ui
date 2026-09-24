@@ -76,6 +76,7 @@ klimax-ui/
 │   │   ├── ContainerDetailView.swift   # user's container: compose stack, ports, labels, logs, lifecycle
 │   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
 │   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
+│   │   ├── FleetDeletionDialog.swift   # shared `klimax fleet delete` confirmation (sidebar + overview)
 │   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
 │   └── Resources/
 │       └── klimax-logo.png             # used both for in-app branding and AppIcon (via swift-bundler)
@@ -333,6 +334,7 @@ produced the binary.
 - **Node labels aren't in `klimax cluster list`** — read them from `kubectl` node metadata (`KubeNode.metadata.labels`), cached per cluster in `AppModel.clusterLabels`. klimax applies `managed-by`, `klimax.dev/fleet`, `topology.kubernetes.io/{region,zone}`, `ingress-ready` (the last is set by the klimax CLI's kind config, not the UI). `AppModel.displayLabels(_:)` filters out k8s system labels.
 - **Adding a label post-creation** uses `klimax cluster label <name> -l key=value` (KlimaxCLI.labelCluster) — **requires klimax 0.1.35+**.
 - **kube-context names == cluster name** (klimax merges each cluster into `~/.kube/config` under a context named after the cluster, not `kind-<name>`), so `currentKubeContext == cluster.name` and `use-context <name>` both work directly.
+- **Clusters are grouped by fleet** (`AppModel.clusterGroups`, `ClusterGroup`): fleets first, alphabetically, then clusters with no fleet. The sidebar and the overview both give each fleet a header with a delete button (the sidebar also has a right-click "Delete Fleet…" on member rows), behind the shared `fleetDeletionDialog` confirmation. Deletion shells `klimax fleet delete <name> -y` (klimax 0.1.37+) rather than looping over names in Swift: klimax resolves membership by label inside the guest, so a cluster whose labels the UI failed to fetch is still included. The dialog lists the members the UI knows about and adds a caveat when `hasClustersWithUnknownFleet`. Logged under `LogScope.fleet(name)`, surfaced on the overview (the fleet's header is gone once it succeeds).
 - **The same node fetch also caches the kubelet version** (`AppModel.clusterNodeVersion`). `kubeNodeVersionSummary` reduces it for the About tab: one version when every cluster agrees, `mixed` (with a per-cluster tooltip) when they don't, and the configured `kind.nodeVersion` image tag from `config.yaml` as the fallback when no cluster is up.
 
 The About tab also shows the guest VM's distribution and kernel (`GuestStats.osName` / `.kernel`), read in one SSH round-trip: `uname -r` plus `PRETTY_NAME` from `/etc/os-release`. They come from the full `stats()` call (refreshAll), not the 5 s sample loop, which just carries them forward.

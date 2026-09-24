@@ -17,8 +17,19 @@ enum LogScope: Hashable, Sendable {
     /// A whole compose stack's lifecycle (start all / stop all), keyed by
     /// project name — shown next to the stack's group header.
     case composeStack(String)
+    /// A whole fleet's lifecycle (delete), keyed by fleet name — shown on the
+    /// overview, since the fleet's clusters (and so its header) are gone after.
+    case fleet(String)
     /// Fleet-wide actions with no single home (e.g. delete-all) — shown on the overview.
     case general
+
+    /// Whether the overview's "Last action" card surfaces this scope.
+    var showsOnOverview: Bool {
+        switch self {
+        case .vm, .fleet, .general: true
+        default: false
+        }
+    }
 }
 
 /// One completed action's log, with the scope that decides where it surfaces.

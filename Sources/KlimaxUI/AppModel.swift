@@ -76,6 +76,33 @@ final class AppModel {
         clusterLabels[clusterName]?["klimax.dev/fleet"]
     }
 
+    /// Clusters bucketed by fleet: fleets first (alphabetically), clusters with
+    /// no fleet last, each bucket keeping `clusters`' order.
+    var clusterGroups: [ClusterGroup] {
+        var byFleet: [String: [KindCluster]] = [:]
+        var ungrouped: [KindCluster] = []
+        for c in clusters {
+            if let f = fleet(of: c.name) {
+                byFleet[f, default: []].append(c)
+            } else {
+                ungrouped.append(c)
+            }
+        }
+        var groups = byFleet
+            .sorted { $0.key.localizedStandardCompare($1.key) == .orderedAscending }
+            .map { ClusterGroup(fleet: $0.key, clusters: $0.value) }
+        if !ungrouped.isEmpty {
+            groups.append(ClusterGroup(fleet: nil, clusters: ungrouped))
+        }
+        return groups
+    }
+
+    /// True while some cluster's node labels haven't been fetched, so its fleet
+    /// membership is unknown to the UI (klimax itself still knows).
+    var hasClustersWithUnknownFleet: Bool {
+        clusters.contains { clusterLabels[$0.name] == nil }
+    }
+
     /// klimax-relevant labels for display — drops the noisy Kubernetes system
     /// labels (hostname/os/arch/roles), keeps fleet, topology, managed-by, and
     /// any custom labels.
@@ -918,6 +945,18 @@ final class AppModel {
             try await KlimaxCLI.deleteCluster(name: name)
         }
         if case .cluster(let sel) = selection, sel == name {
+            selection = nil
+        }
+    }
+
+    /// Delete every cluster in a fleet via `klimax fleet delete`. The view gates
+    /// the call behind a confirmation dialog — this is irreversible.
+    func deleteFleet(named name: String) async {
+        guard inFlightAction == nil else { return }
+        await runAction("Deleting fleet \(name)", scope: .fleet(name)) {
+            try await KlimaxCLI.deleteFleet(name: name)
+        }
+        if case .cluster(let sel) = selection, !clusters.contains(where: { $0.name == sel }) {
             selection = nil
         }
     }

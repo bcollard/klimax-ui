@@ -9,6 +9,7 @@ struct SidebarView: View {
     @State private var mirrorsExpanded = true
     @State private var containersExpanded = true
     @State private var groupPendingRemoval: ContainerGroup?
+    @State private var fleetPendingDeletion: ClusterGroup?
 
     var body: some View {
         List(selection: $model.selection) {
@@ -28,14 +29,29 @@ struct SidebarView: View {
                     .font(.callout)
                     .foregroundStyle(.secondary)
                 } else {
-                    ForEach(model.clusters) { c in
-                        ClusterRow(
-                            cluster: c,
-                            createdAt: model.clusterCreatedAt[c.name],
-                            fleet: model.fleet(of: c.name),
-                            isCurrentContext: model.currentKubeContext == c.name
-                        )
-                        .tag(SidebarSelection.cluster(name: c.name))
+                    ForEach(model.clusterGroups) { group in
+                        if !group.isUngrouped {
+                            FleetGroupHeader(model: model, group: group) {
+                                fleetPendingDeletion = group
+                            }
+                        }
+                        ForEach(group.clusters) { c in
+                            ClusterRow(
+                                cluster: c,
+                                createdAt: model.clusterCreatedAt[c.name],
+                                isCurrentContext: model.currentKubeContext == c.name,
+                                indented: !group.isUngrouped
+                            )
+                            .tag(SidebarSelection.cluster(name: c.name))
+                            .contextMenu {
+                                if let fleet = group.fleet {
+                                    Button("Delete Fleet \"\(fleet)\"…", role: .destructive) {
+                                        fleetPendingDeletion = group
+                                    }
+                                    .disabled(model.inFlightAction != nil)
+                                }
+                            }
+                        }
                     }
                     if let name = model.provisioningClusterName {
                         ProvisioningRow(name: name, failed: model.creation?.failed == true)
@@ -181,6 +197,7 @@ struct SidebarView: View {
         } message: {
             Text("This force-removes every container in the stack, running or not. This cannot be undone.")
         }
+        .fleetDeletionDialog(model: model, pending: $fleetPendingDeletion)
     }
 
     /// One line in the sidebar footer. The icon sits in a fixed-width slot so
@@ -210,8 +227,9 @@ struct SidebarView: View {
 private struct ClusterRow: View {
     let cluster: KindCluster
     let createdAt: Date?
-    var fleet: String? = nil
     var isCurrentContext: Bool = false
+    /// Inset under a fleet heading.
+    var indented: Bool = false
 
     var body: some View {
         Label {
@@ -229,20 +247,13 @@ private struct ClusterRow: View {
                     }
                 }
                 HStack(spacing: 6) {
-                    if let fleet {
-                        Label(fleet, systemImage: "square.stack.3d.up")
-                            .font(.caption2)
-                            .foregroundStyle(.secondary)
-                            .labelStyle(.titleAndIcon)
-                            .help("Fleet")
-                    }
                     if let createdAt {
                         TimelineView(.periodic(from: .now, by: 60)) { context in
                             Text(RelativeAge.format(since: createdAt, now: context.date))
                                 .font(.caption2.monospacedDigit())
                                 .foregroundStyle(.secondary)
                         }
-                    } else if fleet == nil {
+                    } else {
                         Text("—")
                             .font(.caption2)
                             .foregroundStyle(.tertiary)
@@ -253,6 +264,46 @@ private struct ClusterRow: View {
             Image(systemName: "circle.grid.3x3.fill")
                 .foregroundStyle(.blue)
         }
+        .padding(.leading, indented ? 10 : 0)
+    }
+}
+
+/// Heading for one fleet inside the Clusters section. Not tagged, so it never
+/// becomes a selectable row.
+private struct FleetGroupHeader: View {
+    @Bindable var model: AppModel
+    let group: ClusterGroup
+    let onRequestDeletion: () -> Void
+
+    var body: some View {
+        HStack(spacing: 5) {
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(.caption2)
+                .foregroundStyle(.blue)
+            Text(group.fleet ?? "")
+                .font(.caption.weight(.semibold))
+                .lineLimit(1)
+                .truncationMode(.middle)
+            Text("\(group.clusters.count)")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+            if model.inFlightAction != nil {
+                ProgressView().controlSize(.mini)
+            } else {
+                Button(role: .destructive) {
+                    onRequestDeletion()
+                } label: {
+                    Image(systemName: "trash")
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.red)
+                .help("Delete every cluster in this fleet — cannot be undone")
+            }
+        }
+        .font(.caption2)
+        .padding(.top, 4)
+        .help("Fleet \"\(group.fleet ?? "")\" (klimax.dev/fleet)")
     }
 }
 

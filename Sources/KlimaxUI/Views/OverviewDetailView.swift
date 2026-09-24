@@ -9,6 +9,7 @@ struct OverviewDetailView: View {
     @State private var showNewClusterSheet = false
     @State private var showDeleteAllConfirm = false
     @State private var groupPendingRemoval: ContainerGroup?
+    @State private var fleetPendingDeletion: ClusterGroup?
 
     private var clustersHeaderTrailing: AnyView {
         AnyView(
@@ -47,7 +48,7 @@ struct OverviewDetailView: View {
                 if let mounts = model.hostMounts, !mounts.shares.isEmpty {
                     hostMountsSection(mounts)
                 }
-                if let rec = model.latestLog(forAny: [.vm, .general]) {
+                if let rec = model.logRecords.last(where: { $0.scope.showsOnOverview }) {
                     LogConsoleView(title: "Last action", text: rec.text, maxHeight: 200)
                 }
             }
@@ -86,6 +87,7 @@ struct OverviewDetailView: View {
         } message: {
             Text("This force-removes every container in the stack, running or not. This cannot be undone.")
         }
+        .fleetDeletionDialog(model: model, pending: $fleetPendingDeletion)
     }
 
     // MARK: - Hero
@@ -146,16 +148,40 @@ struct OverviewDetailView: View {
                 count: model.clusters.count,
                 trailing: clustersHeaderTrailing
             )
-            LazyVGrid(
-                columns: [GridItem(.adaptive(minimum: 260), spacing: 12)],
-                alignment: .leading,
-                spacing: 12
-            ) {
-                ForEach(model.clusters) { c in
-                    ClusterCard(cluster: c, fleet: model.fleet(of: c.name)) {
-                        model.selection = .cluster(name: c.name)
+            VStack(alignment: .leading, spacing: 14) {
+                ForEach(model.clusterGroups) { group in
+                    if !group.isUngrouped {
+                        VStack(alignment: .leading, spacing: 8) {
+                            fleetGroupHeader(group)
+                            clusterGrid(group.clusters)
+                        }
                     }
                 }
+                // Ungrouped clusters, plus the provisioning and "new" cards,
+                // share the last grid so the create affordance stays at the end.
+                clusterGrid(
+                    model.clusterGroups.first(where: \.isUngrouped)?.clusters ?? [],
+                    trailingCards: true
+                )
+            }
+        }
+    }
+
+    private func clusterGrid(
+        _ clusters: [KindCluster],
+        trailingCards: Bool = false
+    ) -> some View {
+        LazyVGrid(
+            columns: [GridItem(.adaptive(minimum: 260), spacing: 12)],
+            alignment: .leading,
+            spacing: 12
+        ) {
+            ForEach(clusters) { c in
+                ClusterCard(cluster: c) {
+                    model.selection = .cluster(name: c.name)
+                }
+            }
+            if trailingCards {
                 if let name = model.provisioningClusterName {
                     ProvisioningClusterCard(
                         name: name,
@@ -172,6 +198,32 @@ struct OverviewDetailView: View {
                 }
             }
         }
+    }
+
+    private func fleetGroupHeader(_ group: ClusterGroup) -> some View {
+        HStack(spacing: 6) {
+            Image(systemName: "square.stack.3d.up.fill")
+                .font(.caption)
+                .foregroundStyle(.blue)
+            Text(group.fleet ?? "")
+                .font(.headline)
+            Text("\(group.clusters.count) cluster\(group.clusters.count == 1 ? "" : "s")")
+                .font(.caption.monospacedDigit())
+                .foregroundStyle(.secondary)
+            Spacer()
+            if model.inFlightAction != nil {
+                ProgressView().controlSize(.small)
+            } else {
+                Button(role: .destructive) {
+                    fleetPendingDeletion = group
+                } label: {
+                    Label("Delete fleet", systemImage: "trash")
+                }
+                .controlSize(.small)
+                .help("Delete every cluster in this fleet — cannot be undone")
+            }
+        }
+        .help("Fleet \"\(group.fleet ?? "")\" (klimax.dev/fleet)")
     }
 
     // MARK: - Mirrors
@@ -407,7 +459,6 @@ struct OverviewDetailView: View {
 
 private struct ClusterCard: View {
     let cluster: KindCluster
-    var fleet: String? = nil
     let action: () -> Void
     @State private var hovering = false
 
@@ -426,9 +477,6 @@ private struct ClusterCard: View {
                 HStack(spacing: 6) {
                     pill("num \(cluster.num)")
                     pill("api :\(cluster.apiPort)")
-                    if let fleet {
-                        pill("fleet \(fleet)")
-                    }
                 }
                 Text(cluster.kubeconfigPath)
                     .font(.caption2.monospaced())

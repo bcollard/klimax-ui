@@ -68,6 +68,13 @@ enum KlimaxCLI {
         try await ProcessRunner.run(executable, ["cluster", "delete", name, "-y"])
     }
 
+    /// Delete every cluster in a fleet (klimax 0.1.37+). klimax resolves the
+    /// members itself, by the `klimax.dev/fleet` node label inside the guest,
+    /// so a member whose labels the UI failed to fetch is still included.
+    static func deleteFleet(name: String) async throws -> ProcessResult {
+        try await ProcessRunner.run(executable, ["fleet", "delete", name, "-y"])
+    }
+
     /// Run `klimax doctor -o json`, optionally applying the repairs klimax can
     /// perform itself (`--fix`).
     ///

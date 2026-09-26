@@ -53,6 +53,8 @@ struct DoctorCheck: Sendable, Hashable, Decodable, Identifiable {
         case "ip-forward": return "Guest IP forwarding"
         case "rosetta-vm": return "Rosetta 2 (VM)"
         case "proxy": return "HTTP proxy"
+        case "dns": return "Local DNS"
+        case "tls": return "Local CA"
         default: return id
         }
     }

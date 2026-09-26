@@ -8,6 +8,40 @@ import Foundation
 /// next restart, and `pendingRestart` is klimax telling us they disagree.
 struct KlimaxStatus: Sendable, Hashable, Decodable {
     let mounts: Mounts?
+    /// Local DNS zone for LoadBalancer Services (klimax 0.2.0+). Absent on
+    /// older klimax, which the UI treats as "unknown" and hides every DNS
+    /// feature rather than claiming the zone is off.
+    let dns: DNS?
+
+    struct DNS: Sendable, Hashable, Decodable {
+        let enabled: Bool
+        /// e.g. `klimax.internal`; names are `<svc>.<ns>.<cluster>.<domain>`.
+        let domain: String?
+        /// CoreDNS address on the kind network (`x.y.255.53`).
+        let server: String?
+        /// Whether `/etc/resolver/<domain>` on the Mac matches what klimax writes.
+        let hostResolver: Bool
+        /// nil when the VM isn't running — klimax can't ask docker then.
+        let serverRunning: Bool?
+        /// Local CA for the zone (klimax 0.2.2+); nil when `network.dns.tls` is
+        /// off or klimax predates it.
+        let tls: TLS?
+
+        struct TLS: Sendable, Hashable, Decodable {
+            /// `~/.klimax/pki/<domain>/root.crt`, once the root exists.
+            let root: String?
+            let exists: Bool
+            /// Trusted in the macOS System keychain — without it browsers reject
+            /// every certificate under the zone.
+            let trusted: Bool
+        }
+
+        /// The subzone a cluster's ExternalDNS publishes into.
+        func zone(for cluster: String) -> String? {
+            guard enabled, let domain, !domain.isEmpty else { return nil }
+            return "\(cluster).\(domain)"
+        }
+    }
 
     struct Mounts: Sendable, Hashable, Decodable {
         let shares: [Share]

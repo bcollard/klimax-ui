@@ -127,6 +127,67 @@ enum KlimaxCLI {
         }
     }
 
+    /// Read `klimax dns list -o json` (klimax 0.2.0+): every name published in
+    /// the local zone. One `etcdctl` over SSH inside klimax, so it rides
+    /// `refreshAll()` and cluster selection, never a poll loop.
+    static func dnsRecords() async throws -> [LocalDNSRecord] {
+        let result = try await ProcessRunner.run(executable, ["dns", "list", "-o", "json"])
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.ok, let data = stdout.data(using: .utf8), !stdout.isEmpty else {
+            throw CLIError.command("dns list", result.exitCode, result.stderr)
+        }
+        do {
+            return try JSONDecoder().decode([LocalDNSRecord].self, from: data)
+        } catch {
+            throw CLIError.decode(error.localizedDescription)
+        }
+    }
+
+    /// Install ExternalDNS and the CoreDNS forward on an existing cluster
+    /// (`klimax dns attach`). Restarts the cluster's CoreDNS, so in-cluster
+    /// DNS blips — the view confirms first.
+    static func dnsAttach(cluster: String) async throws -> ProcessResult {
+        try await ProcessRunner.run(executable, ["dns", "attach", cluster])
+    }
+
+    /// Read `klimax ca status -o json` (klimax 0.2.2+): the root CA, its
+    /// keychain trust, and which clusters/fleets have a wildcard. Reads files
+    /// under `~/.klimax/pki` on the Mac (~30 ms), so it rides `refreshAll()`.
+    static func caStatus() async throws -> LocalCAStatus {
+        let result = try await ProcessRunner.run(executable, ["ca", "status", "-o", "json"])
+        let stdout = result.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard result.ok, let data = stdout.data(using: .utf8), !stdout.isEmpty else {
+            throw CLIError.command("ca status", result.exitCode, result.stderr)
+        }
+        do {
+            return try JSONDecoder().decode(LocalCAStatus.self, from: data)
+        } catch {
+            throw CLIError.decode(error.localizedDescription)
+        }
+    }
+
+    /// Issue (or renew) a cluster's wildcard and install it (`klimax ca
+    /// attach`). Installing the root in the nodes restarts their containerd —
+    /// the view confirms first.
+    static func caAttach(cluster: String) async throws -> ProcessResult {
+        try await ProcessRunner.run(executable, ["ca", "attach", cluster])
+    }
+
+    /// Copy the cluster's wildcard Secret (or, with `fleet`, its fleet's) into
+    /// another namespace — an Ingress reads its TLS Secret from its own.
+    static func caSecret(cluster: String, namespace: String, fleet: Bool) async throws -> ProcessResult {
+        var args = ["ca", "secret", cluster, "-n", namespace]
+        if fleet { args.append("--fleet") }
+        return try await ProcessRunner.run(executable, args)
+    }
+
+    /// The root CA certificate, PEM (`klimax ca cert`).
+    static func caCert() async throws -> String {
+        let result = try await ProcessRunner.run(executable, ["ca", "cert"])
+        guard result.ok else { throw CLIError.command("ca cert", result.exitCode, result.stderr) }
+        return result.stdout
+    }
+
     /// Return klimax version string, e.g. "klimax 0.1.25".
     static func version() async throws -> String {
         let result = try await ProcessRunner.run(executable, ["version"])

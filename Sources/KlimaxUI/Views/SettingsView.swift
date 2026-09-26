@@ -31,7 +31,7 @@ struct SettingsView: View {
                 }
                 Section {
                     Toggle("Docker containers", isOn: $settings.showContainers)
-                    Text("Show the containers you run in the VM's Docker — everything except klimax's own kind nodes and registry mirrors. When off, the VM's Docker is not queried.")
+                    Text("Show the containers you run in the VM's Docker — everything except klimax's own kind nodes, registry mirrors and local DNS server. When off, the VM's Docker is not queried.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }

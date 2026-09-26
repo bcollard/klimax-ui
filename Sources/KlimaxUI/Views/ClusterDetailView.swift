@@ -8,6 +8,8 @@ struct ClusterDetailView: View {
     @State private var newLabelKey = ""
     @State private var newLabelValue = ""
     @State private var labelError: String?
+    @State private var confirmAttach = false
+    @State private var confirmCAAttach = false
 
     enum Tab: Hashable { case info, services, metrics }
 
@@ -52,6 +54,9 @@ struct ClusterDetailView: View {
                     case .info:
                         podsCard
                         nodesCard
+                        if let zone = model.dnsZone(for: cluster.name) {
+                            localDNSCard(zone: zone)
+                        }
                         kubeconfigCard
                     case .services:
                         ServicesTabView(
@@ -466,6 +471,216 @@ struct ClusterDetailView: View {
         case "Succeeded": return .blue
         case "Failed": return .red
         default: return .gray
+        }
+    }
+
+    // MARK: - Local DNS
+
+    private func localDNSCard(zone: String) -> some View {
+        let names = model.dnsRecords(in: cluster.name)
+        let state = detail?.externalDNS
+        let stale = model.clustersWithUnroutedRecords.contains(cluster.name)
+        return GroupBox("Local DNS") {
+            VStack(alignment: .leading, spacing: 8) {
+                HStack(spacing: 8) {
+                    Text(verbatim: "*.\(zone)")
+                        .font(.system(.callout, design: .monospaced))
+                        .textSelection(.enabled)
+                    Spacer()
+                    if state != .missing {
+                        Text("\(names.count) name\(names.count == 1 ? "" : "s") published")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                if let fleetZone = model.fleetZone(for: cluster.name) {
+                    HStack(spacing: 8) {
+                        Text(verbatim: "*.\(fleetZone)")
+                            .font(.system(.callout, design: .monospaced))
+                            .textSelection(.enabled)
+                        Text("fleet zone")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .help("Shared by every member of the fleet. Names land here only through the external-dns.kubernetes.io/hostname annotation; the first member to publish a name owns it.")
+                    }
+                }
+                HStack(spacing: 6) {
+                    Image(systemName: externalDNSSymbol(state))
+                        .foregroundStyle(externalDNSTint(state))
+                        .imageScale(.small)
+                    Text(externalDNSText(state))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    if state == .missing || stale {
+                        Button {
+                            confirmAttach = true
+                        } label: {
+                            Label(state == .missing ? "Attach" : "Re-attach", systemImage: "link")
+                        }
+                        .controlSize(.small)
+                        .disabled(model.inFlightAction != nil)
+                    }
+                }
+                if stale {
+                    Label("Some names here point at pod IPs the Mac can't reach. An ExternalDNS installed by klimax 0.2.0 published every Service type, headless ones included; re-attaching limits it to LoadBalancer Services and removes the extras.",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if let ca = model.localCA, ca.enabled {
+                    Divider()
+                    tlsRows(ca)
+                }
+            }
+            .padding(6)
+        }
+        .confirmationDialog(
+            "\(state == .missing ? "Attach" : "Re-attach") \(cluster.name) to local DNS?",
+            isPresented: $confirmAttach
+        ) {
+            Button(state == .missing ? "Attach" : "Re-attach") {
+                Task { await model.attachLocalDNS(to: cluster.name) }
+            }
+        } message: {
+            Text("Runs `klimax dns attach \(cluster.name)`: installs or updates ExternalDNS and re-applies the cluster's CoreDNS config, then restarts CoreDNS. In-cluster DNS is briefly interrupted.")
+        }
+        .confirmationDialog(
+            "Issue a TLS wildcard for \(cluster.name)?",
+            isPresented: $confirmCAAttach
+        ) {
+            Button("Issue wildcard") {
+                Task { await model.attachLocalCA(to: cluster) }
+            }
+        } message: {
+            Text("Runs `klimax ca attach \(cluster.name)`: issues *.\(zone) (and the fleet's wildcard) into default/klimax-wildcard-tls, adds the root CA to every node's trust store, and creates a klimax-ca ClusterIssuer if cert-manager is installed. Installing the root restarts the nodes' containerd.")
+        }
+    }
+
+    // MARK: - Local CA
+
+    @ViewBuilder
+    private func tlsRows(_ ca: LocalCAStatus) -> some View {
+        let fleet = model.fleet(of: cluster.name)
+        let issued = ca.cluster(cluster.name)
+        if let issued {
+            wildcardRow(issued, secret: "default/klimax-wildcard-tls", fleet: false)
+        } else {
+            HStack(spacing: 6) {
+                Image(systemName: "lock.slash")
+                    .foregroundStyle(.secondary)
+                    .imageScale(.small)
+                Text("No TLS wildcard yet: this cluster was created before the local CA existed.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Button {
+                    confirmCAAttach = true
+                } label: {
+                    Label("Issue wildcard", systemImage: "lock")
+                }
+                .controlSize(.small)
+                .disabled(model.inFlightAction != nil)
+            }
+        }
+        if let fleet, let fleetIssued = ca.fleet(fleet) {
+            wildcardRow(fleetIssued, secret: "default/klimax-fleet-wildcard-tls", fleet: true)
+        }
+        if ca.exists, !ca.trusted {
+            Label("This Mac doesn't trust the klimax root CA yet, so browsers reject these certificates. Run `klimax ca trust` in a terminal (it needs sudo).",
+                  systemImage: "exclamationmark.triangle.fill")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+    }
+
+    private func wildcardRow(_ zone: LocalCAStatus.Zone, secret: String, fleet: Bool) -> some View {
+        let days = zone.notAfter.flatMap(Self.daysUntil)
+        let renewSoon = (days ?? .max) <= 30
+        return HStack(spacing: 6) {
+            Image(systemName: "lock.fill")
+                .foregroundStyle(renewSoon ? .orange : .green)
+                .imageScale(.small)
+            Text(verbatim: zone.wildcard)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+            Text(verbatim: secret)
+                .font(.caption.monospaced())
+                .foregroundStyle(.tertiary)
+            if let notAfter = zone.notAfter {
+                Text("expires \(notAfter)")
+                    .font(.caption)
+                    .foregroundStyle(renewSoon ? AnyShapeStyle(Color.orange) : AnyShapeStyle(.secondary))
+            }
+            Spacer()
+            if renewSoon {
+                Button {
+                    confirmCAAttach = true
+                } label: {
+                    Label("Renew", systemImage: "arrow.clockwise")
+                }
+                .controlSize(.small)
+                .disabled(model.inFlightAction != nil)
+                .help("klimax ca attach re-issues a wildcard within 30 days of expiry")
+            }
+            Menu {
+                ForEach(secretTargetNamespaces, id: \.self) { ns in
+                    Button(ns) {
+                        Task { await model.copyWildcardSecret(from: cluster, to: ns, fleet: fleet) }
+                    }
+                }
+            } label: {
+                Label("Copy to namespace", systemImage: "doc.on.doc")
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .controlSize(.small)
+            .disabled(model.inFlightAction != nil || secretTargetNamespaces.isEmpty)
+            .help("klimax ca secret: an Ingress reads its TLS Secret from its own namespace. Re-run after the wildcard is renewed.")
+        }
+    }
+
+    /// Namespaces that run pods, minus `default` (where the Secret already is)
+    /// and the system ones nobody terminates TLS in.
+    private var secretTargetNamespaces: [String] {
+        let skip: Set<String> = ["default", "kube-system", "kube-public", "kube-node-lease",
+                                 "local-path-storage", "metallb-system", "external-dns"]
+        return Set((detail?.pods ?? []).compactMap(\.metadata.namespace))
+            .subtracting(skip)
+            .sorted()
+    }
+
+    static func daysUntil(_ date: String) -> Int? {
+        let f = DateFormatter()
+        f.dateFormat = "yyyy-MM-dd"
+        f.timeZone = TimeZone(identifier: "UTC")
+        guard let d = f.date(from: date) else { return nil }
+        return Calendar.current.dateComponents([.day], from: Date(), to: d).day
+    }
+
+    private func externalDNSText(_ state: ExternalDNSState?) -> String {
+        switch state {
+        case .ready: return "ExternalDNS publishes this cluster's LoadBalancer Services as <service>.<namespace> under this zone."
+        case .notReady: return "ExternalDNS is installed but not ready yet."
+        case .missing: return "Not attached: this cluster was created before local DNS was on, or the install failed. Its Services have no names."
+        case nil: return detail?.loading == true ? "Checking ExternalDNS…" : "Couldn't read ExternalDNS state."
+        }
+    }
+
+    private func externalDNSSymbol(_ state: ExternalDNSState?) -> String {
+        switch state {
+        case .ready: return "checkmark.circle.fill"
+        case .notReady: return "clock.fill"
+        case .missing: return "exclamationmark.triangle.fill"
+        case nil: return "questionmark.circle"
+        }
+    }
+
+    private func externalDNSTint(_ state: ExternalDNSState?) -> Color {
+        switch state {
+        case .ready: return .green
+        case .notReady, .missing: return .orange
+        case nil: return .secondary
         }
     }
 

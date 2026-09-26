@@ -52,6 +52,21 @@ struct KubeClient: Sendable {
         return dep.isReady
     }
 
+    /// State of klimax's per-cluster ExternalDNS (`external-dns/external-dns`).
+    /// nil when kubectl failed for another reason than NotFound — an
+    /// unreachable API server must not read as "not attached".
+    func externalDNSState() async -> ExternalDNSState? {
+        let args = baseArgs(["get", "deployment", "external-dns", "-n", "external-dns", "-o", "json"])
+        guard let result = try? await ProcessRunner.run("kubectl", args) else { return nil }
+        if !result.ok {
+            return result.stderr.contains("NotFound") ? .missing : nil
+        }
+        guard let data = result.stdout.data(using: .utf8),
+              let dep = try? JSONDecoder().decode(KubeDeployment.self, from: data)
+        else { return nil }
+        return dep.isReady ? .ready : .notReady
+    }
+
     /// Creation timestamp of the kube-system namespace — a reliable proxy for
     /// when the cluster itself was bootstrapped, since kind creates it as part
     /// of cluster setup. Returns nil when the cluster isn't reachable.

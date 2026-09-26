@@ -37,6 +37,15 @@ struct KlimaxConfig: Sendable, Hashable, Decodable {
         /// (klimax 0.1.60+). Absent means klimax inherits whatever macOS has —
         /// which is the common case, so absence is not "no proxy".
         let proxy: Proxy?
+        /// Local DNS zone settings (klimax 0.2.0+). Only `nameTemplate` is read
+        /// from here; live state comes from `klimax status`.
+        let dns: DNS?
+
+        struct DNS: Sendable, Hashable, Decodable {
+            /// ExternalDNS `--fqdn-template` relative to `<cluster>.<domain>`
+            /// (klimax 0.2.2+). nil means klimax's default `{{.Name}}.{{.Namespace}}`.
+            let nameTemplate: String?
+        }
 
         struct Proxy: Sendable, Hashable, Decodable {
             let http: String?

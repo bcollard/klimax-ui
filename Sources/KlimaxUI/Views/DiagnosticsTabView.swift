@@ -7,11 +7,15 @@ import AppKit
 struct DiagnosticsTabView: View {
     @Bindable var model: AppModel
     @State private var signature = CodeSignatureModel()
+    @State private var copiedRootCA = false
 
     var body: some View {
         Form {
             doctorSection
             environmentSection
+            if let dns = model.localDNS {
+                localDNSSection(dns)
+            }
             integritySection
         }
         .formStyle(.grouped)
@@ -24,6 +28,9 @@ struct DiagnosticsTabView: View {
             }
             if signature.status == nil {
                 await signature.check()
+            }
+            if model.dnsRecords == nil {
+                await model.refreshDNSRecords()
             }
         }
     }
@@ -58,7 +65,7 @@ struct DiagnosticsTabView: View {
                     }
                     .controlSize(.small)
                     .buttonStyle(.borderedProminent)
-                    .help("Runs klimax doctor --fix. The macOS route repair needs sudo, which an app bundle can't prompt for — if it fails, run the command in a terminal.")
+                    .help("Runs klimax doctor --fix. The macOS route repair, the /etc/resolver file for local DNS and trusting the local CA need sudo, which an app bundle can't prompt for — if either fails, run the command shown under it in a terminal.")
                 }
 
                 if model.doctorRunning {
@@ -82,7 +89,8 @@ struct DiagnosticsTabView: View {
             Text("""
                  Runs `klimax doctor`: the Lima hostagent, the VM, the macOS \
                  route to the kind bridge, Rosetta on both sides, the guest's \
-                 no-NAT exemption and IP forwarding. Nothing here is polled — \
+                 no-NAT exemption, IP forwarding, the local DNS path from the \
+                 Mac and the local CA's trust. Nothing here is polled — \
                  the probes are too heavy for a background loop.
                  """)
                 .font(.caption)
@@ -178,6 +186,213 @@ struct DiagnosticsTabView: View {
         let n = caCertFiles.count
         if n == 0 { return "system roots only" }
         return "\(n) extra CA\(n == 1 ? "" : "s")"
+    }
+
+    // MARK: - Local DNS
+
+    /// The zone's moving parts, from `klimax status` (and `klimax dns list`
+    /// for the records). klimax doctor's "Local DNS" check probes the real
+    /// host path; this shows which piece is which.
+    @ViewBuilder
+    private func localDNSSection(_ dns: KlimaxStatus.DNS) -> some View {
+        Section {
+            if !dns.enabled {
+                LabeledContent("Local DNS") {
+                    Text("off (network.dns.enabled: false)")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+            } else {
+                LabeledContent("Zone") {
+                    Text(verbatim: "*.\(dns.domain ?? "—")")
+                        .font(.callout.monospaced())
+                        .textSelection(.enabled)
+                }
+                LabeledContent("DNS server") {
+                    HStack(spacing: 6) {
+                        Text(dns.server ?? "—")
+                            .font(.callout.monospaced())
+                            .textSelection(.enabled)
+                        dnsStateBadge(dns.serverRunning.map { $0 ? .ok("running") : .bad("not running") }
+                                      ?? .unknown("VM stopped"))
+                    }
+                }
+                LabeledContent("macOS resolver") {
+                    HStack(spacing: 6) {
+                        Text(verbatim: "/etc/resolver/\(dns.domain ?? "")")
+                            .font(.caption.monospaced())
+                            .foregroundStyle(.secondary)
+                        dnsStateBadge(dns.hostResolver ? .ok("present") : .bad("missing"))
+                    }
+                }
+                if !dns.hostResolver {
+                    Text("Without it only the VM and the pods resolve the zone. Run `klimax up` in a terminal: writing the file needs sudo once, which the app can't prompt for.")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                LabeledContent("Published names") {
+                    if let records = model.dnsRecords {
+                        Text("\(records.count)")
+                            .font(.callout.monospacedDigit())
+                    } else if let err = model.dnsRecordsError {
+                        Text(err)
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                            .lineLimit(2)
+                            .multilineTextAlignment(.trailing)
+                    } else {
+                        Text("—").foregroundStyle(.tertiary)
+                    }
+                }
+                let unrouted = model.unroutedDNSRecords
+                if !unrouted.isEmpty {
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label("\(unrouted.count) name\(unrouted.count == 1 ? "" : "s") point outside the kind bridge (\(model.config?.network?.kindBridgeCIDR ?? "?")). They resolve, but the Mac has no route to the address.",
+                              systemImage: "exclamationmark.triangle.fill")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                        let stale = model.clustersWithUnroutedRecords
+                        if !stale.isEmpty {
+                            Text("An ExternalDNS installed by klimax 0.2.0 published every Service type, headless ones with pod IPs. Re-attaching limits it to LoadBalancer Services and removes these.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            HStack(spacing: 6) {
+                                ForEach(stale, id: \.self) { name in
+                                    Button("Re-attach \(name)") {
+                                        Task { await model.attachLocalDNS(to: name) }
+                                    }
+                                    .controlSize(.small)
+                                    .disabled(model.inFlightAction != nil)
+                                    .help("klimax dns attach \(name) — restarts the cluster's CoreDNS, briefly interrupting in-cluster DNS")
+                                }
+                                if let action = model.inFlightAction, action.contains("local DNS") {
+                                    ProgressView().controlSize(.small)
+                                }
+                            }
+                        }
+                        ForEach(unrouted) { rec in
+                            Text(verbatim: "\(rec.name) → \(rec.ip)")
+                                .font(.caption.monospaced())
+                                .foregroundStyle(.secondary)
+                                .textSelection(.enabled)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                        }
+                    }
+                }
+            }
+            if let tls = dns.tls, dns.enabled {
+                localCARows(tls)
+            }
+        } header: {
+            Text("Local DNS")
+        } footer: {
+            Text("Every LoadBalancer Service resolves as <service>.<namespace>.<cluster>.\(dns.domain ?? "<domain>") from the Mac, the VM and pods. `dig` skips /etc/resolver: query the server directly (`dig @\(dns.server ?? "<server>") <name>`) or test the Mac's own path with `dscacheutil -q host -a name <name>`.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    /// The local CA: whether the root exists and macOS trusts it, and which
+    /// clusters/fleets hold a wildcard.
+    @ViewBuilder
+    private func localCARows(_ tls: KlimaxStatus.DNS.TLS) -> some View {
+        LabeledContent("Local CA") {
+            HStack(spacing: 6) {
+                if let notAfter = model.localCA?.notAfter {
+                    Text("root expires \(notAfter)")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                dnsStateBadge(!tls.exists ? .bad("no root")
+                              : tls.trusted ? .ok("trusted") : .bad("not trusted"))
+            }
+        }
+        if !tls.exists {
+            Text("klimax creates the root on the next `klimax up`.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        } else if !tls.trusted {
+            Text("Browsers and curl reject every certificate under the zone until macOS trusts the root. Run `klimax ca trust` in a terminal: it writes to the System keychain with sudo, which the app can't prompt for.")
+                .font(.caption)
+                .foregroundStyle(.orange)
+        }
+        if let ca = model.localCA {
+            LabeledContent("Wildcards") {
+                Text(wildcardSummary(ca))
+                    .font(.callout)
+                    .foregroundStyle(ca.clusters.isEmpty ? AnyShapeStyle(.secondary) : AnyShapeStyle(.primary))
+                    .multilineTextAlignment(.trailing)
+            }
+            let missing = model.clusters.map(\.name).filter { ca.cluster($0) == nil }
+            if !missing.isEmpty {
+                Text("No wildcard yet: \(missing.joined(separator: ", ")). Issue one from the cluster's Info tab (klimax ca attach).")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        if tls.exists, let root = tls.root {
+            HStack(spacing: 8) {
+                Text(root)
+                    .font(.caption.monospaced())
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .textSelection(.enabled)
+                Spacer()
+                Button {
+                    Task {
+                        guard let pem = await model.rootCertificatePEM() else { return }
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(pem, forType: .string)
+                        copiedRootCA = true
+                        try? await Task.sleep(for: .seconds(2))
+                        copiedRootCA = false
+                    }
+                } label: {
+                    Label(copiedRootCA ? "Copied" : "Copy root PEM",
+                          systemImage: copiedRootCA ? "checkmark" : "doc.on.doc")
+                }
+                .controlSize(.small)
+                .help("klimax ca cert — for a client that doesn't read the macOS keychain (Node, Python, Firefox, a container)")
+                Button {
+                    NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: root)])
+                } label: {
+                    Image(systemName: "folder")
+                }
+                .controlSize(.small)
+                .buttonStyle(.borderless)
+                .help("Show in Finder")
+            }
+        }
+    }
+
+    private func wildcardSummary(_ ca: LocalCAStatus) -> String {
+        let c = ca.clusters.count, f = ca.fleets?.count ?? 0
+        if c == 0, f == 0 { return "none issued" }
+        var parts = ["\(c) cluster\(c == 1 ? "" : "s")"]
+        if f > 0 { parts.append("\(f) fleet\(f == 1 ? "" : "s")") }
+        return parts.joined(separator: ", ")
+    }
+
+    private enum DNSPartState {
+        case ok(String), bad(String), unknown(String)
+    }
+
+    private func dnsStateBadge(_ state: DNSPartState) -> some View {
+        let (text, tint): (String, Color) = {
+            switch state {
+            case .ok(let t): return (t, .green)
+            case .bad(let t): return (t, .red)
+            case .unknown(let t): return (t, .secondary)
+            }
+        }()
+        return Text(text.uppercased())
+            .font(.caption2.weight(.semibold))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 1)
+            .background(Capsule().fill(tint.opacity(0.18)))
+            .foregroundStyle(tint)
     }
 
     // MARK: - App integrity

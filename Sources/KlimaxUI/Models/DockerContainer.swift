@@ -105,7 +105,13 @@ struct DockerContainer: Sendable, Hashable, Identifiable {
     enum Managed: Sendable, Hashable {
         case kindNode(cluster: String, role: String?)
         case registryMirror(name: String)
+        /// klimax's local DNS server (CoreDNS) or its etcd backend.
+        case localDNS(name: String)
     }
+
+    /// Containers `klimax up` runs for `network.dns`. klimax labels neither,
+    /// so the names are the signal — the same approach as for mirrors.
+    static let localDNSContainerNames: Set<String> = ["klimax-dns", "klimax-dns-etcd"]
 
     /// Classify against the mirrors declared in the klimax config.
     ///
@@ -113,9 +119,13 @@ struct DockerContainer: Sendable, Hashable, Identifiable {
     /// so the config's mirror names are the primary signal; the `registry-` +
     /// `registry:<tag>` shape is a fallback for a config that has drifted from
     /// what is actually running (a mirror removed from the file but still up).
+    /// The local DNS containers are matched by name, like mirrors.
     func managed(mirrorNames: Set<String>) -> Managed? {
         if let kindCluster {
             return .kindNode(cluster: kindCluster, role: kindRole)
+        }
+        if Self.localDNSContainerNames.contains(name) {
+            return .localDNS(name: name)
         }
         if mirrorNames.contains(name) {
             return .registryMirror(name: name)

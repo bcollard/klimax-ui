@@ -44,7 +44,8 @@ klimax-ui/
 │   │   ├── AppSettings.swift           # @Observable prefs (visibility + poll cadences), UserDefaults-backed
 │   │   ├── LogRecord.swift             # LogScope enum + LogRecord for scoped action logs
 │   │   ├── DoctorReport.swift          # decodes `klimax doctor -o json` (stable check ids)
-│   │   ├── KlimaxStatus.swift         # decodes `klimax status -o json` — VM host mounts
+│   │   ├── KlimaxStatus.swift         # decodes `klimax status -o json` — VM host mounts, local DNS state
+│   │   ├── LocalDNS.swift              # dns list records, ca status, wildcard coverage, name resolution, ExternalDNS state, IPv4 CIDR
 │   │   ├── DockerContainer.swift       # guest container, compose membership, classification
 │   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | .container(id) | nil
 │   ├── Services/
@@ -52,7 +53,7 @@ klimax-ui/
 │   │   ├── SSHConfigParser.swift       # hand-parses OpenSSH config from ssh.config
 │   │   ├── GuestSSH.swift              # ssh -F shell-out; reads /proc/stat, /proc/meminfo
 │   │   ├── ProcessRunner.swift         # async Process wrapper with PATH search
-│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list/status/doctor -o json`, up/down, create/delete
+│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list/status/doctor/dns list/ca status -o json`, up/down, create/delete, dns/ca attach, ca secret/cert
 │   │   ├── KubeClient.swift            # kubectl shell-out: nodes/pods/services/deployments
 │   │   ├── Helm.swift                  # helm repo add/update/install metrics-server
 │   │   ├── DockerClient.swift          # guest `docker ps`(+inspect labels)/logs/lifecycle over GuestSSH
@@ -196,6 +197,9 @@ Classification (`DockerContainer.managed(mirrorNames:)`) decides what klimax own
   config. klimax puts **no label** on these containers, so the config is the primary
   signal; a `registry-*` name on a `registry:<tag>` image is the fallback for a config
   that has drifted from what is actually running.
+- **local DNS** (`klimax-dns`, `klimax-dns-etcd`) by name — also unlabelled. Without
+  this they'd surface as the user's containers, with stack Stop/Remove next to the
+  server every `*.klimax.internal` lookup on the Mac depends on.
 
 Everything else is the user's own and surfaces as **Docker containers** in the sidebar/overview/detail views when
 `AppSettings.showContainers` is on. When it's off nothing queries the guest's docker at
@@ -283,6 +287,75 @@ docker actually resolves against.
 
 The container detail view renders that per mount: green "on your Mac", orange "not shared
 from your Mac — this path exists only inside the VM", nothing for a volume.
+
+### Local DNS — `klimax status` + `klimax dns list`
+
+klimax 0.2.0 publishes every LoadBalancer Service (and Ingress host) as
+`<svc>.<ns>.<cluster>.<domain>` (default domain `klimax.internal`): ExternalDNS per
+cluster writes into etcd, CoreDNS on the kind network (`x.y.255.53`) serves it, and
+`/etc/resolver/<domain>` sends the Mac's lookups there.
+
+- **State** comes from the `dns` block of the same `status()` call as the mounts
+  (`enabled`, `domain`, `server`, `hostResolver`, `serverRunning`). Absent on older
+  klimax → `AppModel.localDNS == nil` → every DNS feature is hidden, not shown as "off".
+- **Records** come from `klimax dns list -o json` (one `etcdctl` over SSH inside
+  klimax). Fetched on `refreshAll()` and in `loadClusterDetail` — never polled. With a
+  cluster selected, `refreshAll` skips its own call because `refreshSelection` does it.
+- **Services tab** matches records to a Service by VIP within the cluster's subzone
+  **or its fleet zone** `<fleet>.<domain>` (klimax 0.2.3; `AppModel.dnsNames(for:in:)`).
+  The automatic name — `network.dns.nameTemplate` rendered for `.Name`/`.Namespace`,
+  default `{{.Name}}.{{.Namespace}}` — sorts first and becomes the link host, with the
+  IP kept as secondary text. A template using `.Labels`/`.Annotations` can't be
+  rendered here, so then no name is singled out. Fleet-zone names get a `fleet` badge.
+- **Two dots, two questions.** The DNS row's dot is `getaddrinfo` (`HostResolver`),
+  which on macOS goes through mDNSResponder and so honours `/etc/resolver` — the same
+  path a browser takes. The TCP row's dot is still the probe against the IP. A red DNS
+  dot next to a green TCP dot points at the resolver file or the DNS container, not
+  the Service.
+- **Cluster Info** shows the subzone and ExternalDNS's state
+  (`KubeClient.externalDNSState()`: `external-dns/external-dns`; only a kubectl
+  `NotFound` reads as "missing", so an unreachable API server doesn't offer Attach).
+  Missing → **Attach** runs `klimax dns attach <name>` behind a confirmation, because
+  it restarts the cluster's CoreDNS.
+- **Diagnostics** gets a Local DNS section (zone, server, resolver file, record count)
+  and lists records whose IP is outside `kindBridgeCIDR` — they resolve, but the Mac
+  has no route. `dig` ignores `/etc/resolver`, so the copyable command is
+  `dig @<server> <name>` and the footer points at `dscacheutil -q host -a name`.
+- The doctor `dns` check's `--fix` writes `/etc/resolver` with `sudo -n`, which fails
+  from an app bundle; the check's `fix` field (`klimax up`) is the copyable fallback.
+- **Stale records.** klimax 0.2.0's ExternalDNS published every Service type, so
+  headless Services landed with pod IPs. 0.2.1 added `--service-type-filter=LoadBalancer`,
+  but only a `klimax dns attach` applies it to an existing cluster.
+  `AppModel.clustersWithUnroutedRecords` drives a **Re-attach** button on the cluster
+  Info card and per-cluster buttons in Diagnostics.
+- macOS negative-caches a failed lookup for **~75 s** regardless of the zone's SOA, so a
+  name looked up before ExternalDNS published it stays red that long.
+
+### Local CA — `klimax status` + `klimax ca status`
+
+klimax 0.2.2 runs an in-process CA for the zone (`network.dns.tls`, on by default): a
+root in `~/.klimax/pki/<domain>/` trusted in the System keychain, one intermediate and
+`*.<cluster>.<domain>` wildcard per cluster (Secret `default/klimax-wildcard-tls`), and
+from 0.2.3 a `*.<fleet>.<domain>` wildcard in every member
+(`default/klimax-fleet-wildcard-tls`).
+
+- `status.dns.tls` (`exists`, `trusted`, `root`) gates everything; `klimax ca status -o
+  json` adds the root expiry and which clusters/fleets hold a wildcard. It only reads
+  files on the Mac (~30 ms), so it rides `refreshAll()` next to `status`.
+- **A wildcard covers exactly one label.** The default automatic name is two labels
+  (`<svc>.<ns>.<cluster>.<domain>`), so it is *not* covered. The Services tab shows a
+  green lock only on one-label names under a zone with an issued wildcard
+  (`WildcardCoverage.isOneLabel`), and a grey struck lock elsewhere. Its tooltip names
+  the ways out: a one-label hostname annotation, a cert-manager `klimax-ca` Certificate.
+- **Cluster Info** lists the cluster and fleet wildcards with expiry, **Copy to
+  namespace** (`klimax ca secret <cluster> -n <ns> [--fleet]`, namespaces taken from the
+  loaded pods minus system ones), **Renew** within 30 days of expiry, and **Issue
+  wildcard** when none exists. Issue/Renew both run `klimax ca attach`, behind a
+  confirmation because installing the root restarts the nodes' containerd.
+- **Diagnostics** shows root trust and expiry, the wildcard count, which clusters lack
+  one, the root path, and **Copy root PEM** (`klimax ca cert`) for clients that don't
+  read the keychain. Trusting the root needs sudo, so an untrusted root shows
+  `klimax ca trust` to run in a terminal. The doctor check id is `tls`.
 
 ### Diagnostics — `klimax doctor` and the app's own signature
 

@@ -144,7 +144,7 @@ struct SidebarView: View {
                         Spacer()
                     }
                     .padding(.bottom, 6)
-                    .help("Containers in the VM's Docker, other than klimax's own kind nodes and registry mirrors.")
+                    .help("Containers in the VM's Docker, other than klimax's own kind nodes, registry mirrors and local DNS server.")
                 }
             }
 

@@ -23,8 +23,8 @@ final class AppSettings {
     var showVMStats: Bool { didSet { store.set(showVMStats, forKey: Keys.showVMStats) } }
 
     /// Show the containers running in the guest VM that klimax does not manage
-    /// — everything except the kind nodes and the pull-through registry
-    /// mirrors, both of which already have their own place in the UI. Off by
+    /// — everything except the kind nodes, the pull-through registry mirrors
+    /// and the local DNS containers, which already have their own place in the UI. Off by
     /// default: a stock klimax VM has none, so the section would just be empty.
     var showContainers: Bool { didSet { store.set(showContainers, forKey: Keys.showContainers) } }
 

@@ -171,6 +171,117 @@ final class AppModel {
     // the Mac. nil when the klimax CLI predates the feature (0.1.59).
     var hostMounts: KlimaxStatus.Mounts?
 
+    // Local DNS zone state from the same `klimax status` call. nil when klimax
+    // predates `network.dns` (0.2.0), which hides every DNS feature.
+    var localDNS: KlimaxStatus.DNS?
+    // Every name in the zone (`klimax dns list`). nil until fetched, or while
+    // the zone is off / the VM is down.
+    var dnsRecords: [LocalDNSRecord]?
+    var dnsRecordsError: String?
+    // How each published name resolves on the Mac: cluster -> name -> result.
+    var nameResolutions: [String: [String: NameResolution]] = [:]
+    private var resolveTask: Task<Void, Never>?
+
+    // Local CA (`klimax ca status`): root trust and which clusters/fleets hold
+    // a wildcard. nil when `network.dns.tls` is off or klimax predates it.
+    var localCA: LocalCAStatus?
+
+    /// The subzone a cluster publishes into, when the zone is on.
+    func dnsZone(for clusterName: String) -> String? {
+        localDNS?.zone(for: clusterName)
+    }
+
+    /// The fleet zone `<fleet>.<domain>` a cluster's ExternalDNS also owns
+    /// (klimax 0.2.3+). Names land there only through the hostname annotation.
+    func fleetZone(for clusterName: String) -> String? {
+        guard let fleet = fleet(of: clusterName) else { return nil }
+        return localDNS?.zone(for: fleet)
+    }
+
+    /// The automatic name klimax's ExternalDNS gives a Service:
+    /// `network.dns.nameTemplate` (default `{{.Name}}.{{.Namespace}}`) plus the
+    /// cluster zone. nil when the template uses fields we can't render here
+    /// (`.Labels`, `.Annotations`) — then no name is singled out.
+    func automaticName(for service: KubeService, in clusterName: String) -> String? {
+        guard let zone = dnsZone(for: clusterName) else { return nil }
+        var name = config?.network?.dns?.nameTemplate ?? "{{.Name}}.{{.Namespace}}"
+        for (field, value) in [("Name", service.metadata.name),
+                               ("Namespace", service.metadata.namespace ?? "default")] {
+            name = name.replacingOccurrences(of: "{{.\(field)}}", with: value)
+                .replacingOccurrences(of: "{{ .\(field) }}", with: value)
+        }
+        return name.contains("{{") ? nil : "\(name).\(zone)"
+    }
+
+    /// Names that point at one of this Service's VIPs, in its cluster zone or
+    /// its fleet zone. The automatic name comes first; the rest are hostname
+    /// annotations or Ingress hosts on the same VIP.
+    func dnsNames(for service: KubeService, in clusterName: String) -> [LocalDNSRecord] {
+        guard let dnsRecords else { return [] }
+        let zones = [dnsZone(for: clusterName), fleetZone(for: clusterName)].compactMap { $0 }
+        guard !zones.isEmpty else { return [] }
+        let ips = Set(service.externalIPs)
+        let automatic = automaticName(for: service, in: clusterName)
+        return dnsRecords
+            .filter { rec in ips.contains(rec.ip) && zones.contains { rec.name.hasSuffix("." + $0) } }
+            .sorted { a, b in
+                if (a.name == automatic) != (b.name == automatic) { return a.name == automatic }
+                return a.name < b.name
+            }
+    }
+
+    /// Published names in a cluster's own subzone.
+    func dnsRecords(in clusterName: String) -> [LocalDNSRecord] {
+        guard let zone = dnsZone(for: clusterName) else { return [] }
+        return (dnsRecords ?? []).filter { $0.name.hasSuffix("." + zone) }
+    }
+
+    /// Whether a name falls under a fleet zone rather than the cluster's own.
+    func isFleetName(_ name: String, in clusterName: String) -> Bool {
+        guard let zone = fleetZone(for: clusterName) else { return false }
+        return name.hasSuffix("." + zone)
+    }
+
+    /// The klimax wildcard that covers a name, when one has been issued. A
+    /// wildcard covers one label, so a default two-label automatic name isn't.
+    func wildcardCoverage(for name: String, in clusterName: String) -> WildcardCoverage? {
+        guard let localCA else { return nil }
+        if let zone = dnsZone(for: clusterName), let issued = localCA.cluster(clusterName),
+           WildcardCoverage.isOneLabel(name, under: zone) {
+            return .cluster(wildcard: issued.wildcard)
+        }
+        if let fleet = fleet(of: clusterName), let zone = fleetZone(for: clusterName),
+           let issued = localCA.fleet(fleet), WildcardCoverage.isOneLabel(name, under: zone) {
+            return .fleet(wildcard: issued.wildcard)
+        }
+        return nil
+    }
+
+    /// Whether the Mac has a route to an address: klimax routes only the kind
+    /// bridge CIDR to the VM. nil when the CIDR isn't known.
+    func isRoutable(_ ip: String) -> Bool? {
+        guard let cidr = config?.network?.kindBridgeCIDR.flatMap(IPv4CIDR.init) else { return nil }
+        return cidr.contains(ip)
+    }
+
+    /// Records whose address is outside the kind bridge: the name resolves,
+    /// but nothing on the Mac can reach it.
+    var unroutedDNSRecords: [LocalDNSRecord] {
+        (dnsRecords ?? []).filter { isRoutable($0.ip) == false }
+    }
+
+    /// Clusters whose zone holds unroutable records. klimax 0.2.0's ExternalDNS
+    /// published every Service type — headless ones with pod IPs; 0.2.1 limits
+    /// it to LoadBalancer, but only for clusters (re)attached since, and
+    /// `policy=sync` then drops the extras.
+    var clustersWithUnroutedRecords: [String] {
+        let unrouted = unroutedDNSRecords
+        return clusters.map(\.name).filter { name in
+            guard let zone = dnsZone(for: name) else { return false }
+            return unrouted.contains { $0.name.hasSuffix("." + zone) }
+        }
+    }
+
     // Registry mirror disk-usage measurements, keyed by mirror name.
     var mirrorCacheSizes: [String: MirrorCacheSize] = [:]
 
@@ -255,6 +366,8 @@ final class AppModel {
         var pods: [KubePod] = []
         var services: [KubeService] = []
         var metricsServerReady: Bool = false
+        /// nil when the zone is off, or kubectl couldn't tell.
+        var externalDNS: ExternalDNSState? = nil
         var serverVersion: String? = nil
         var loading: Bool = true
         var error: String? = nil
@@ -287,8 +400,9 @@ final class AppModel {
 
     private var mirrorNames: Set<String> { Set(mirrors.map(\.name)) }
 
-    /// Containers klimax doesn't own — everything that isn't a kind node or a
-    /// pull-through mirror. Running first, then most recently created.
+    /// Containers klimax doesn't own — everything that isn't a kind node, a
+    /// pull-through mirror or the local DNS server. Running first, then most
+    /// recently created.
     var unmanagedContainers: [DockerContainer] {
         let names = mirrorNames
         return containers
@@ -497,7 +611,11 @@ final class AppModel {
         else if klimaxVersion == nil { klimaxVersion = "klimax (unknown)" }
         // Mounts come from the Lima instance config, so this answers even for a
         // stopped VM — which is exactly when someone checks whether an edit landed.
-        hostMounts = (try? await KlimaxCLI.status())?.mounts
+        let status = try? await KlimaxCLI.status()
+        hostMounts = status?.mounts
+        localDNS = status?.dns
+        // Host-side file reads (~30 ms); only when klimax reports a local CA.
+        localCA = status?.dns?.tls != nil ? try? await KlimaxCLI.caStatus() : nil
         await refreshClusters()
         await refreshCurrentKubeContext()
         if let vm, vm.isRunning, let ssh = vm.ssh {
@@ -509,11 +627,16 @@ final class AppModel {
             // Only when the feature is on: otherwise this is an SSH round-trip
             // per refresh for a list nothing displays.
             if settings.showContainers { await refreshContainers() }
+            // A selected cluster re-reads the records in loadClusterDetail
+            // (via refreshSelection below); don't pay for `dns list` twice.
+            if case .cluster = selection {} else { await refreshDNSRecords() }
         } else {
             guestLima0IP = nil
             guestStats = nil
             containers = []
             containersError = nil
+            dnsRecords = nil
+            dnsRecordsError = nil
         }
         // Drop stale selection — but keep it while that cluster is still
         // provisioning (it isn't in `clusters` yet by design).
@@ -807,6 +930,90 @@ final class AppModel {
         }
     }
 
+    /// Re-read the zone's records. Skipped when klimax is too old, the zone is
+    /// off, or the VM is down — `klimax dns list` would only fail.
+    func refreshDNSRecords() async {
+        guard localDNS?.enabled == true, vm?.isRunning == true else {
+            dnsRecords = nil
+            dnsRecordsError = nil
+            return
+        }
+        do {
+            dnsRecords = try await KlimaxCLI.dnsRecords()
+            dnsRecordsError = nil
+        } catch {
+            dnsRecordsError = error.localizedDescription
+        }
+    }
+
+    /// Resolve every name in the cluster's subzone through macOS's resolver.
+    /// A name that doesn't resolve while its VIP answers points at
+    /// `/etc/resolver` (or the DNS container), not at the Service.
+    func resolveDNSNames(for cluster: KindCluster) {
+        let clusterName = cluster.name
+        // The names the Services tab shows — cluster and fleet zone, LoadBalancer
+        // VIPs only. Stale headless-Service records aren't worth a lookup.
+        let services = clusterDetail?.cluster.name == clusterName ? clusterDetail?.services ?? [] : []
+        let names = services.filter(\.isLoadBalancer)
+            .flatMap { dnsNames(for: $0, in: clusterName) }
+            .map(\.name)
+        resolveTask?.cancel()
+        guard !names.isEmpty else {
+            nameResolutions[clusterName] = [:]
+            return
+        }
+        resolveTask = Task { [weak self] in
+            let results = await withTaskGroup(of: (String, NameResolution).self) { group -> [String: NameResolution] in
+                for name in Set(names) {
+                    group.addTask {
+                        let addrs = await HostResolver.resolveIPv4(name)
+                        return (name, NameResolution(timestamp: Date(), addresses: addrs))
+                    }
+                }
+                var bucket: [String: NameResolution] = [:]
+                for await (name, res) in group { bucket[name] = res }
+                return bucket
+            }
+            guard !Task.isCancelled else { return }
+            self?.nameResolutions[clusterName] = results
+        }
+    }
+
+    /// Publish an existing cluster's Services in the zone. The view confirms
+    /// first: attaching restarts the cluster's CoreDNS.
+    /// Also what removes the headless-Service records a klimax 0.2.0 attach
+    /// published, and joins the cluster's ExternalDNS to its fleet zone.
+    func attachLocalDNS(to clusterName: String) async {
+        guard inFlightAction == nil else { return }
+        await runAction("Attaching \(clusterName) to local DNS", scope: .cluster(clusterName)) {
+            try await KlimaxCLI.dnsAttach(cluster: clusterName)
+        }
+    }
+
+    /// Issue (or renew) the cluster's wildcard and its fleet's. The view
+    /// confirms first: installing the root restarts the nodes' containerd.
+    func attachLocalCA(to cluster: KindCluster) async {
+        guard inFlightAction == nil else { return }
+        await runAction("Issuing TLS wildcard for \(cluster.name)", scope: .cluster(cluster.name)) {
+            try await KlimaxCLI.caAttach(cluster: cluster.name)
+        }
+    }
+
+    /// Copy the cluster's (or its fleet's) wildcard Secret into a namespace, so
+    /// an Ingress or a pod there can use it.
+    func copyWildcardSecret(from cluster: KindCluster, to namespace: String, fleet: Bool) async {
+        guard inFlightAction == nil else { return }
+        let which = fleet ? "fleet wildcard" : "wildcard"
+        await runAction("Copying \(cluster.name)'s \(which) Secret to \(namespace)", scope: .cluster(cluster.name)) {
+            try await KlimaxCLI.caSecret(cluster: cluster.name, namespace: namespace, fleet: fleet)
+        }
+    }
+
+    /// The root CA PEM, for a client's trust store. nil on failure.
+    func rootCertificatePEM() async -> String? {
+        try? await KlimaxCLI.caCert()
+    }
+
     /// Called externally when the user toggles metrics-server install/uninstall.
     /// Restart or stop polling based on current readiness.
     func refreshMetricsPolling() {
@@ -828,22 +1035,29 @@ final class AppModel {
             async let servicesTask = kube.listServices()
             async let metricsTask = kube.metricsServerReady()
             async let versionTask = kube.clusterVersion()
+            let dnsOn = localDNS?.enabled == true
+            async let externalDNSTask: ExternalDNSState? = dnsOn ? kube.externalDNSState() : nil
+            async let recordsTask: Void = refreshDNSRecords()
             let nodes = try await nodesTask
             let pods = try await podsTask
             let services = try await servicesTask
             let metricsReady = await metricsTask
             let version = await versionTask
+            let externalDNS = await externalDNSTask
+            await recordsTask
             clusterDetail = ClusterDetail(
                 cluster: cluster,
                 nodes: nodes,
                 pods: pods,
                 services: services,
                 metricsServerReady: metricsReady,
+                externalDNS: externalDNS,
                 serverVersion: version,
                 loading: false,
                 error: nil
             )
             probeLoadBalancers(for: cluster)
+            resolveDNSNames(for: cluster)
         } catch {
             clusterDetail = ClusterDetail(
                 cluster: cluster,

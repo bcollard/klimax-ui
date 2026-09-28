@@ -1,21 +1,32 @@
-# Klimax UI — Architecture Notes
+# Marina UI — Architecture Notes
 
-A native macOS app that reads klimax state directly (no CLI shell-out for state), talks to the guest VM over the SSH ControlMaster socket klimax already maintains, and uses `kubectl`/`helm` shell-outs for cluster operations.
+A native macOS app that reads marina state directly (no CLI shell-out for state), talks to the guest VM over the SSH ControlMaster socket marina already maintains, and uses `kubectl`/`helm` shell-outs for cluster operations.
 
-- **Bundle id:** `dev.bcollard.KlimaxUI`
-- **Display name:** Klimax
+- **Bundle id:** `dev.bcollard.MarinaUI`
+- **Display name:** Marina
 - **Target:** macOS 14+
 - **Toolchain:** Swift 6, SwiftPM executable target
-- **Distribution:** Developer-ID-signed + notarized DMG via the [`bcollard/homebrew-klimax`](https://github.com/bcollard/homebrew-klimax) tap. Built with [swift-bundler](https://github.com/moreSwift/swift-bundler) (config in `Bundler.toml`).
+- **Distribution:** Developer-ID-signed + notarized DMG via the [`bcollard/homebrew-marina`](https://github.com/bcollard/homebrew-marina) tap. Built with [swift-bundler](https://github.com/moreSwift/swift-bundler) (config in `Bundler.toml`).
+
+
+## Renamed from Klimax UI (v0.3.0)
+
+The app was Klimax UI (`dev.bcollard.KlimaxUI`, cask `klimax-ui`) until the CLI's
+klimax → marina rename. Identifiers follow the CLI exactly: `~/.marina`, the
+`marina` binary, `marina.run/fleet`, `managed-by=marina`, `marina-dns*` containers,
+`default/marina-wildcard-tls`. The bundle id changed, so preferences start fresh.
+The notarytool keychain profile keeps its old default name `klimax-notary` — it
+lives in the keychain, not in this repo. The tap needs `cask_renames.json`
+`{"klimax-ui": "marina-ui"}` once `Casks/marina-ui.rb` is published.
 
 ---
 
 ## Quick start
 
 ```bash
-./build.sh                                                # → .build/bundler/apps/KlimaxUI/KlimaxUI.app (ad-hoc signed)
-cp -R .build/bundler/apps/KlimaxUI/KlimaxUI.app /Applications/
-open /Applications/KlimaxUI.app
+./build.sh                                                # → .build/bundler/apps/MarinaUI/MarinaUI.app (ad-hoc signed)
+cp -R .build/bundler/apps/MarinaUI/MarinaUI.app /Applications/
+open /Applications/MarinaUI.app
 ```
 
 For a signed + notarized release, use `./scripts/release.sh` (see [Release](#build-and-release)).
@@ -25,35 +36,35 @@ For a signed + notarized release, use `./scripts/release.sh` (see [Release](#bui
 ## Project layout
 
 ```
-klimax-ui/
+marina-ui/
 ├── Package.swift                       # SwiftPM, macOS 14, executable target, Yams dep
 ├── Bundler.toml                        # swift-bundler config; source of truth for Info.plist
 ├── build.sh                            # dev path: swift-bundler bundle + ad-hoc sign
 ├── scripts/release.sh                  # full Developer ID release flow
-├── Sources/KlimaxUI/
-│   ├── KlimaxUIApp.swift               # @main, WindowGroup, NSApp activationPolicy hack
-│   ├── AppAssets.swift                 # loads klimax-logo.png from Bundle.module
+├── Sources/MarinaUI/
+│   ├── MarinaUIApp.swift               # @main, WindowGroup, NSApp activationPolicy hack
+│   ├── AppAssets.swift                 # loads marina-logo.png from Bundle.module
 │   ├── AppModel.swift                  # @MainActor @Observable, all state + polling tasks
 │   ├── Models/
 │   │   ├── Instance.swift              # VM struct: name, dir, runtime, ssh, lima config
 │   │   ├── Cluster.swift               # KindCluster: name, num, apiPort, kubeconfigPath
-│   │   ├── KlimaxConfig.swift          # mirrors ~/.klimax/_config/config.yaml
+│   │   ├── MarinaConfig.swift          # mirrors ~/.marina/_config/config.yaml
 │   │   ├── KubeTypes.swift             # KubeNode/Pod/Deployment/Service decodables
 │   │   ├── Metrics.swift               # cluster metric samples + ring-buffer history
 │   │   ├── VMMetrics.swift             # VM sample + history (raw /proc/stat ticks for CPU%)
 │   │   ├── AppSettings.swift           # @Observable prefs (visibility + poll cadences), UserDefaults-backed
 │   │   ├── LogRecord.swift             # LogScope enum + LogRecord for scoped action logs
-│   │   ├── DoctorReport.swift          # decodes `klimax doctor -o json` (stable check ids)
-│   │   ├── KlimaxStatus.swift         # decodes `klimax status -o json` — VM host mounts, local DNS state
+│   │   ├── DoctorReport.swift          # decodes `marina doctor -o json` (stable check ids)
+│   │   ├── MarinaStatus.swift         # decodes `marina status -o json` — VM host mounts, local DNS state
 │   │   ├── LocalDNS.swift              # dns list records, ca status, wildcard coverage, name resolution, ExternalDNS state, IPv4 CIDR
 │   │   ├── DockerContainer.swift       # guest container, compose membership, classification
 │   │   └── SidebarSelection.swift      # enum: .cluster(name) | .mirror(name) | .container(id) | nil
 │   ├── Services/
-│   │   ├── InstanceDiscovery.swift     # scans ~/.klimax/, reads vz.pid liveness, lima.yaml
+│   │   ├── InstanceDiscovery.swift     # scans ~/.marina/, reads vz.pid liveness, lima.yaml
 │   │   ├── SSHConfigParser.swift       # hand-parses OpenSSH config from ssh.config
 │   │   ├── GuestSSH.swift              # ssh -F shell-out; reads /proc/stat, /proc/meminfo
 │   │   ├── ProcessRunner.swift         # async Process wrapper with PATH search
-│   │   ├── KlimaxCLI.swift             # wraps `klimax cluster list/status/doctor/dns list/ca status -o json`, up/down, create/delete, dns/ca attach, ca secret/cert
+│   │   ├── MarinaCLI.swift             # wraps `marina cluster list/status/doctor/dns list/ca status -o json`, up/down, create/delete, dns/ca attach, ca secret/cert
 │   │   ├── KubeClient.swift            # kubectl shell-out: nodes/pods/services/deployments
 │   │   ├── Helm.swift                  # helm repo add/update/install metrics-server
 │   │   ├── DockerClient.swift          # guest `docker ps`(+inspect labels)/logs/lifecycle over GuestSSH
@@ -73,14 +84,14 @@ klimax-ui/
 │   │   ├── MetricsChartsView.swift     # cluster CPU/mem charts + top pods table
 │   │   ├── VMChartsView.swift          # VM CPU%/mem charts (Swift Charts + hover tooltips)
 │   │   ├── SettingsView.swift          # ⌘, preferences window: Visibility/Refresh/Diagnostics/About
-│   │   ├── DiagnosticsTabView.swift    # klimax doctor checks + app integrity block
+│   │   ├── DiagnosticsTabView.swift    # marina doctor checks + app integrity block
 │   │   ├── ContainerDetailView.swift   # user's container: compose stack, ports, labels, logs, lifecycle
 │   │   ├── ConsoleLogView.swift        # collapsible aggregated console panel (bottom of detail)
 │   │   ├── LogConsoleView.swift        # scrollable colorized log box (per-view "Last action" cards)
-│   │   ├── FleetDeletionDialog.swift   # shared `klimax fleet delete` confirmation (sidebar + overview)
-│   │   └── NewClusterSheet.swift       # modal for `klimax cluster create`
+│   │   ├── FleetDeletionDialog.swift   # shared `marina fleet delete` confirmation (sidebar + overview)
+│   │   └── NewClusterSheet.swift       # modal for `marina cluster create`
 │   └── Resources/
-│       └── klimax-logo.png             # used both for in-app branding and AppIcon (via swift-bundler)
+│       └── marina-logo.png             # used both for in-app branding and AppIcon (via swift-bundler)
 └── .gitignore
 ```
 
@@ -88,20 +99,20 @@ klimax-ui/
 
 ## Data sources
 
-We **bypass the klimax CLI for state-reads** wherever possible — every CLI invocation is a fork+exec and stale state from the CLI's own caching path would only confuse the UI. State of record:
+We **bypass the marina CLI for state-reads** wherever possible — every CLI invocation is a fork+exec and stale state from the CLI's own caching path would only confuse the UI. State of record:
 
-### `~/.klimax/<vm>/` — VM truth
+### `~/.marina/<vm>/` — VM truth
 
 - `lima.yaml` — Lima config; we read `cpus`, `memory`, `disk` for the VM card.
-- `ssh.config` — generated by klimax; gives us host/port/user/IdentityFile/ControlPath.
+- `ssh.config` — generated by marina; gives us host/port/user/IdentityFile/ControlPath.
 - `vz.pid` — VM process ID; `kill(0, pid)` tells us if the VM is running.
-- `_config/config.yaml` — klimax-level config (mirrors, kind defaults). Decoded via Yams.
+- `_config/config.yaml` — marina-level config (mirrors, kind defaults). Decoded via Yams.
 
 `InstanceDiscovery.scan()` walks this directory, skips reserved entries (`_config`, `registry-cache`, `share`), and builds an `Instance`. Only one VM is ever expected.
 
 ### Guest VM — `/proc/stat` over SSH
 
-`GuestSSH` shell-outs to `ssh -F <ssh.config> <host>`, riding the ControlMaster socket klimax already keeps open (no fresh handshake on each call). For the VM polling loop we issue a single SSH command that emits `/proc/stat | head -1` and `/proc/meminfo | head -3` separated by `---`, then parse:
+`GuestSSH` shell-outs to `ssh -F <ssh.config> <host>`, riding the ControlMaster socket marina already keeps open (no fresh handshake on each call). For the VM polling loop we issue a single SSH command that emits `/proc/stat | head -1` and `/proc/meminfo | head -3` separated by `---`, then parse:
 
 - **CPU%** — `1 − idleΔ/totalΔ`, where `idle` is `(idle + iowait)` ticks. Requires a stored previous sample (`GuestRawSample`) to take the delta.
 - **Memory** — `MemTotal − MemAvailable` for used, `MemTotal` for total.
@@ -110,8 +121,8 @@ Poll cadence: user-configurable, default 5 s (`AppSettings.vmPollSeconds`; read 
 
 #### Disk usage — root disk and the image-cache disk
 
-klimax gives the VM two independently-resizable disks (`lima.yaml`: `disk` for the root
-filesystem, `additionalDisks: [klimax-img]` mounted at `/var/lib/containerd`) — everything
+marina gives the VM two independently-resizable disks (`lima.yaml`: `disk` for the root
+filesystem, `additionalDisks: [marina-img]` mounted at `/var/lib/containerd`) — everything
 `docker pull`/`build` writes lands on the second one, separately from the root disk. A full
 one can't be seen from `df` on the Mac (it's inside the VM) and fails in a way that looks
 like anything else — a `docker compose up --build` dying mid-export with "no space left on
@@ -122,7 +133,7 @@ kernel/OS info) adds one more section to its single round-trip: `df -k
 --output=source,size,used,avail / /var/lib/containerd`. The two paths are always passed in
 that fixed order, so the parser reads them positionally rather than matching the `target`
 column. `imageDisk` is only populated when its device differs from the root's — an older
-klimax without the `additionalDisks` split reports the same filesystem for both paths, and
+marina without the `additionalDisks` split reports the same filesystem for both paths, and
 showing two identical bars would be misleading rather than informative.
 
 The sidebar VM card renders both as "used / total GiB", colored by fraction full — 80%/95%
@@ -153,7 +164,7 @@ For each selected cluster's LoadBalancer services, `AppModel.probeLoadBalancers(
 
 ### Registry mirror cache — filesystem inspection
 
-`RegistryCacheInspector` walks each mirror directory under `~/.klimax/registry-cache/<mirror>/`:
+`RegistryCacheInspector` walks each mirror directory under `~/.marina/registry-cache/<mirror>/`:
 
 - Total disk usage via `du -sk` (`DirectorySize`).
 - Tag count via `find <path> -path '*/_manifests/tags/*/current/link' -type f`.
@@ -189,21 +200,21 @@ entry and a truncated path. So:
   classification never depends on it, so a failure there can't make kind nodes show up
   as strays.
 
-Classification (`DockerContainer.managed(mirrorNames:)`) decides what klimax owns:
+Classification (`DockerContainer.managed(mirrorNames:)`) decides what marina owns:
 
 - **kind nodes** by the `io.x-k8s.kind.cluster` label — the same signal `kind get
   clusters` uses, so it beats matching on the container name.
-- **registry mirrors** by name against `registries.mirrors[].name` from the klimax
-  config. klimax puts **no label** on these containers, so the config is the primary
+- **registry mirrors** by name against `registries.mirrors[].name` from the marina
+  config. marina puts **no label** on these containers, so the config is the primary
   signal; a `registry-*` name on a `registry:<tag>` image is the fallback for a config
   that has drifted from what is actually running.
-- **local DNS** (`klimax-dns`, `klimax-dns-etcd`) by name — also unlabelled. Without
+- **local DNS** (`marina-dns`, `marina-dns-etcd`) by name — also unlabelled. Without
   this they'd surface as the user's containers, with stack Stop/Remove next to the
-  server every `*.klimax.internal` lookup on the Mac depends on.
+  server every `*.demo.internal` lookup on the Mac depends on.
 
 Everything else is the user's own and surfaces as **Docker containers** in the sidebar/overview/detail views when
 `AppSettings.showContainers` is on. When it's off nothing queries the guest's docker at
-all. Published ports are linked at the VM's **lima0** address, not `127.0.0.1`: klimax
+all. Published ports are linked at the VM's **lima0** address, not `127.0.0.1`: marina
 sets `network.disablePortMirroring`, so Lima's loopback mirroring is off and lima0 is
 the only address that works from the host.
 
@@ -228,7 +239,7 @@ Compose labels read (all verified against a live stack, Compose v5.5.1):
 | `com.docker.compose.project.working_dir` | shown on the group header and detail card |
 | `com.docker.compose.project.config_files` | comma-separated list of compose files |
 
-> ⚠️ **Never run `docker compose up` inside the klimax VM casually.** The Compose in the
+> ⚠️ **Never run `docker compose up` inside the marina VM casually.** The Compose in the
 > guest removes orphan containers *without* `--remove-orphans` being passed, and it
 > considers kind node containers orphans — a `docker compose up` in a scratch project
 > destroyed a running kind cluster's node (verified in `docker events`). Test compose
@@ -237,7 +248,7 @@ Compose labels read (all verified against a live stack, Compose v5.5.1):
 
 `ContainerDetailView` offers start / stop / restart (logged under `LogScope.container(id)`)
 and an on-demand `docker logs --tail N`. Deliberately **no `docker rm`** on a single
-container — removal is unrecoverable and one container isn't klimax's to destroy out
+container — removal is unrecoverable and one container isn't marina's to destroy out
 from under the rest of its stack.
 
 The stack as a whole gets Start/Stop/Remove next to its name in the sidebar and overview
@@ -254,32 +265,32 @@ every real example we've seen, is invisible to a plain `docker compose ls` even 
 every container regardless of state, so Remove is the in-app way to clear one out without
 first rediscovering `-a` or the project's original compose files.
 
-### Host mounts — `klimax status -o json`
+### Host mounts — `marina status -o json`
 
-klimax 0.1.59 added `vm.mounts`: host directories shared into the guest over virtiofs.
+marina 0.1.59 added `vm.mounts`: host directories shared into the guest over virtiofs.
 This matters more than it sounds, and it is the one place the UI can tell the user
 something neither `docker` nor `kubectl` will:
 
 > Docker runs **inside** the VM and resolves a bind-mount source **there**. Binding a host
-> path klimax doesn't share does **not** fail — dockerd creates the missing directory in
+> path marina doesn't share does **not** fail — dockerd creates the missing directory in
 > the guest and the container sees an empty one. The container starts, reports healthy,
 > and silently has none of your files.
 
-`KlimaxCLI.status()` decodes `klimax status -o json` for `mounts.shares` and
-`mounts.pendingRestart`. Deliberately this and not `config.yaml`: klimax reads the share
+`MarinaCLI.status()` decodes `marina status -o json` for `mounts.shares` and
+`mounts.pendingRestart`. Deliberately this and not `config.yaml`: marina reads the share
 list from the **Lima instance config**, so it answers "what does the VM actually have"
-rather than "what will it have after the next restart" — and `pendingRestart` is klimax
+rather than "what will it have after the next restart" — and `pendingRestart` is marina
 telling us the two disagree. It costs one CLI invocation (~350 ms), so it rides
-`refreshAll()` and never a poll loop. `mounts` is absent on older klimax; the optional
+`refreshAll()` and never a poll loop. `mounts` is absent on older marina; the optional
 decodes to nil and the UI omits the section rather than guessing.
 
-The overview titles this section **Volume mounts** and lists klimax's own registry-cache
+The overview titles this section **Volume mounts** and lists marina's own registry-cache
 share last and greyed out: it is a real share — a bind into it does reach the Mac, so it
 stays in the data the backing check uses — but it is plumbing the user never configured,
 so the count above it only counts theirs.
 
 `AppModel.backing(for:)` resolves each container bind against that list —
-`.hostShare` / `.guestOnly` / `.notApplicable` (a volume) / `.unknown` (klimax too old to
+`.hostShare` / `.guestOnly` / `.notApplicable` (a volume) / `.unknown` (marina too old to
 say, so we must not claim either way). The prefix test appends a `/` before comparing, so
 a share of `/Users/me/projects` does not falsely claim `/Users/me/projectsX`. The
 comparison is against `guestPath`, not `hostPath`, because a remapped `mountPoint` is what
@@ -288,25 +299,25 @@ docker actually resolves against.
 The container detail view renders that per mount: green "on your Mac", orange "not shared
 from your Mac — this path exists only inside the VM", nothing for a volume.
 
-### Local DNS — `klimax status` + `klimax dns list`
+### Local DNS — `marina status` + `marina dns list`
 
-klimax 0.2.0 publishes every LoadBalancer Service (and Ingress host) as
-`<svc>.<ns>.<cluster>.<domain>` (default domain `klimax.internal`): ExternalDNS per
+marina 0.2.0 publishes every LoadBalancer Service (and Ingress host) as
+`<svc>.<ns>.<cluster>.<domain>` (default domain `demo.internal`): ExternalDNS per
 cluster writes into etcd, CoreDNS on the kind network (`x.y.255.53`) serves it, and
 `/etc/resolver/<domain>` sends the Mac's lookups there.
 
 - **State** comes from the `dns` block of the same `status()` call as the mounts
   (`enabled`, `domain`, `server`, `hostResolver`, `serverRunning`). Absent on older
-  klimax → `AppModel.localDNS == nil` → every DNS feature is hidden, not shown as "off".
-- **Records** come from `klimax dns list -o json` (one `etcdctl` over SSH inside
-  klimax). Fetched on `refreshAll()` and in `loadClusterDetail` — never polled. With a
+  marina → `AppModel.localDNS == nil` → every DNS feature is hidden, not shown as "off".
+- **Records** come from `marina dns list -o json` (one `etcdctl` over SSH inside
+  marina). Fetched on `refreshAll()` and in `loadClusterDetail` — never polled. With a
   cluster selected, `refreshAll` skips its own call because `refreshSelection` does it.
 - **Services tab** matches records to a Service by VIP within the cluster's subzone
-  **or its fleet zone** `<fleet>.<domain>` (klimax 0.2.3; `AppModel.dnsNames(for:in:)`),
+  **or its fleet zone** `<fleet>.<domain>` (marina 0.2.3; `AppModel.dnsNames(for:in:)`),
   ordered most deliberate first: names from the Service's
   `external-dns.kubernetes.io/hostname` annotation, then other names on the VIP
   (`DNSNameSource.sharedVIP`, typically Ingress hosts), then the automatic name
-  (`network.dns.nameTemplate`, default `{{.Name}}.{{.Namespace}}`). klimax runs
+  (`network.dns.nameTemplate`, default `{{.Name}}.{{.Namespace}}`). marina runs
   ExternalDNS with `--combine-fqdn-annotation`, so the automatic name stays published
   next to a custom one — it is listed last and dimmed, and the first name is the
   endpoint host. Each name carries an `annotation` / `automatic` / `same VIP` badge;
@@ -324,54 +335,54 @@ cluster writes into etcd, CoreDNS on the kind network (`x.y.255.53`) serves it, 
 - **Cluster Info** shows the subzone and ExternalDNS's state
   (`KubeClient.externalDNSState()`: `external-dns/external-dns`; only a kubectl
   `NotFound` reads as "missing", so an unreachable API server doesn't offer Attach).
-  Missing → **Attach** runs `klimax dns attach <name>` behind a confirmation, because
+  Missing → **Attach** runs `marina dns attach <name>` behind a confirmation, because
   it restarts the cluster's CoreDNS.
 - **Diagnostics** gets a Local DNS section (zone, server, resolver file, record count)
   and lists records whose IP is outside `kindBridgeCIDR` — they resolve, but the Mac
   has no route. `dig` ignores `/etc/resolver`, so the copyable command is
   `dig @<server> <name>` and the footer points at `dscacheutil -q host -a name`.
 - The doctor `dns` check's `--fix` writes `/etc/resolver` with `sudo -n`, which fails
-  from an app bundle; the check's `fix` field (`klimax up`) is the copyable fallback.
-- **Stale records.** klimax 0.2.0's ExternalDNS published every Service type, so
+  from an app bundle; the check's `fix` field (`marina up`) is the copyable fallback.
+- **Stale records.** marina 0.2.0's ExternalDNS published every Service type, so
   headless Services landed with pod IPs. 0.2.1 added `--service-type-filter=LoadBalancer`,
-  but only a `klimax dns attach` applies it to an existing cluster.
+  but only a `marina dns attach` applies it to an existing cluster.
   `AppModel.clustersWithUnroutedRecords` drives a **Re-attach** button on the cluster
   Info card and per-cluster buttons in Diagnostics.
 - macOS negative-caches a failed lookup for **~75 s** regardless of the zone's SOA, so a
   name looked up before ExternalDNS published it stays red that long.
 
-### Local CA — `klimax status` + `klimax ca status`
+### Local CA — `marina status` + `marina ca status`
 
-klimax 0.2.2 runs an in-process CA for the zone (`network.dns.tls`, on by default): a
-root in `~/.klimax/pki/<domain>/` trusted in the System keychain, one intermediate and
-`*.<cluster>.<domain>` wildcard per cluster (Secret `default/klimax-wildcard-tls`), and
+marina 0.2.2 runs an in-process CA for the zone (`network.dns.tls`, on by default): a
+root in `~/.marina/pki/<domain>/` trusted in the System keychain, one intermediate and
+`*.<cluster>.<domain>` wildcard per cluster (Secret `default/marina-wildcard-tls`), and
 from 0.2.3 a `*.<fleet>.<domain>` wildcard in every member
-(`default/klimax-fleet-wildcard-tls`).
+(`default/marina-fleet-wildcard-tls`).
 
-- `status.dns.tls` (`exists`, `trusted`, `root`) gates everything; `klimax ca status -o
+- `status.dns.tls` (`exists`, `trusted`, `root`) gates everything; `marina ca status -o
   json` adds the root expiry and which clusters/fleets hold a wildcard. It only reads
   files on the Mac (~30 ms), so it rides `refreshAll()` next to `status`.
 - **A wildcard covers exactly one label.** The default automatic name is two labels
   (`<svc>.<ns>.<cluster>.<domain>`), so it is *not* covered. The Services tab shows a
   green lock only on one-label names under a zone with an issued wildcard
   (`WildcardCoverage.isOneLabel`), and a grey struck lock elsewhere. Its tooltip names
-  the ways out: a one-label hostname annotation, a cert-manager `klimax-ca` Certificate.
+  the ways out: a one-label hostname annotation, a cert-manager `marina-ca` Certificate.
 - **Cluster Info** lists the cluster and fleet wildcards with expiry, **Copy to
-  namespace** (`klimax ca secret <cluster> -n <ns> [--fleet]`, namespaces taken from the
+  namespace** (`marina ca secret <cluster> -n <ns> [--fleet]`, namespaces taken from the
   loaded pods minus system ones), **Renew** within 30 days of expiry, and **Issue
-  wildcard** when none exists. Issue/Renew both run `klimax ca attach`, behind a
+  wildcard** when none exists. Issue/Renew both run `marina ca attach`, behind a
   confirmation because installing the root restarts the nodes' containerd.
 - **Diagnostics** shows root trust and expiry, the wildcard count, which clusters lack
-  one, the root path, and **Copy root PEM** (`klimax ca cert`) for clients that don't
+  one, the root path, and **Copy root PEM** (`marina ca cert`) for clients that don't
   read the keychain. Trusting the root needs sudo, so an untrusted root shows
-  `klimax ca trust` to run in a terminal. The doctor check id is `tls`.
+  `marina ca trust` to run in a terminal. The doctor check id is `tls`.
 
-### Diagnostics — `klimax doctor` and the app's own signature
+### Diagnostics — `marina doctor` and the app's own signature
 
 The Settings window's **Diagnostics** tab answers two unrelated questions.
 
-`KlimaxCLI.doctor(fix:)` shells `klimax doctor -o json`; the check `id`s are a documented
-stable contract on the klimax side, so `DoctorCheck.title` keys its labels off them and an
+`MarinaCLI.doctor(fix:)` shells `marina doctor -o json`; the check `id`s are a documented
+stable contract on the marina side, so `DoctorCheck.title` keys its labels off them and an
 unknown `status` decodes to `.unknown` rather than failing the whole report. Nothing here
 is polled — the probes (route table, in-guest iptables, Rosetta) are far too heavy for a
 loop. `--fix` repairs the route / iptables / IP-forwarding checks itself, but the route fix
@@ -379,9 +390,9 @@ shells to `sudo`; launched from an app bundle there is no controlling terminal, 
 fails fast with "no tty present" and the UI surfaces that plus a copyable command.
 
 The tab's **Network & trust** section reads `network.proxy` and `vm.caCerts` from the
-klimax config (0.1.60+). Both are invisible everywhere else and both fail in ways that
+marina config (0.1.60+). Both are invisible everywhere else and both fail in ways that
 look like something else — a proxy-less pull hangs, an untrusted CA fails with "certificate
-signed by unknown authority". An **absent** proxy block is not "no proxy": klimax inherits
+signed by unknown authority". An **absent** proxy block is not "no proxy": marina inherits
 macOS's system settings, so the UI says "inherited from macOS" rather than "none".
 
 `CodeSignatureCheck` verifies the *running* bundle with `codesign --verify`, `codesign
@@ -406,17 +417,17 @@ produced the binary.
 
 ### Settings and scoped action logs
 
-- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`, `showContainers`) and the three poll cadences. One instance is created in `KlimaxUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView(model:) }` scene binds it to ⌘, and the standard "Settings…" menu item; the sidebar footer's "Settings & About" button opens the same window via `@Environment(\.openSettings)`. The window's fourth tab, **About**, is the home for version/environment facts — Klimax UI, klimax CLI, the Kubernetes version of the kind nodes, and the guest VM's distribution and kernel — so it takes `AppModel` as well as `AppSettings`.
+- **`AppSettings`** (`@MainActor @Observable`, `UserDefaults`-backed) holds visibility toggles (`showConsoleLog`, `showMirrors`, `showVMStats`, `showContainers`) and the three poll cadences. One instance is created in `MarinaUIApp`, injected into the SwiftUI environment (`@Environment(AppSettings.self)`) for the views **and** passed to `AppModel` for the loops. The `Settings { SettingsView(model:) }` scene binds it to ⌘, and the standard "Settings…" menu item; the sidebar footer's "Settings & About" button opens the same window via `@Environment(\.openSettings)`. The window's fourth tab, **About**, is the home for version/environment facts — Marina UI, marina CLI, the Kubernetes version of the kind nodes, and the guest VM's distribution and kernel — so it takes `AppModel` as well as `AppSettings`.
 - **Action logs are scoped** (`LogScope`: `.vm` / `.cluster(name)` / `.metrics(name)` / `.container(id)` / `.general`). Every completed action appends a `LogRecord` via `appendLog(scope:label:text:)`; each view surfaces only its relevant entry via `model.latestLog(for:)` / `latestLog(forAny:)` — the cluster Info/Services tabs show `.cluster`, the Metrics tab shows `.metrics`, the overview shows `.vm`/`.general`. The optional bottom **`ConsoleLogView`** (toggled by `showConsoleLog`, collapsible) shows the full timestamped `consoleTranscript` across all scopes.
 
-`AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the klimax CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
+`AppModel.refreshAll()` reloads VM state, clusters, mirrors, config, **and the marina CLI version** (so it tracks CLI upgrades). `loadClusterDetail(_:)` fetches nodes/pods/services/deployments/version concurrently for the just-selected cluster.
 
 ### Cluster labels, fleet, and kube-context
 
-- **Node labels aren't in `klimax cluster list`** — read them from `kubectl` node metadata (`KubeNode.metadata.labels`), cached per cluster in `AppModel.clusterLabels`. klimax applies `managed-by`, `klimax.dev/fleet`, `topology.kubernetes.io/{region,zone}`, `ingress-ready` (the last is set by the klimax CLI's kind config, not the UI). `AppModel.displayLabels(_:)` filters out k8s system labels.
-- **Adding a label post-creation** uses `klimax cluster label <name> -l key=value` (KlimaxCLI.labelCluster) — **requires klimax 0.1.35+**.
-- **kube-context names == cluster name** (klimax merges each cluster into `~/.kube/config` under a context named after the cluster, not `kind-<name>`), so `currentKubeContext == cluster.name` and `use-context <name>` both work directly.
-- **Clusters are grouped by fleet** (`AppModel.clusterGroups`, `ClusterGroup`): fleets first, alphabetically, then clusters with no fleet. The sidebar and the overview both give each fleet a header with a delete button (the sidebar also has a right-click "Delete Fleet…" on member rows), behind the shared `fleetDeletionDialog` confirmation. Deletion shells `klimax fleet delete <name> -y` (klimax 0.1.37+) rather than looping over names in Swift: klimax resolves membership by label inside the guest, so a cluster whose labels the UI failed to fetch is still included. The dialog lists the members the UI knows about and adds a caveat when `hasClustersWithUnknownFleet`. Logged under `LogScope.fleet(name)`, surfaced on the overview (the fleet's header is gone once it succeeds).
+- **Node labels aren't in `marina cluster list`** — read them from `kubectl` node metadata (`KubeNode.metadata.labels`), cached per cluster in `AppModel.clusterLabels`. marina applies `managed-by`, `marina.run/fleet`, `topology.kubernetes.io/{region,zone}`, `ingress-ready` (the last is set by the marina CLI's kind config, not the UI). `AppModel.displayLabels(_:)` filters out k8s system labels.
+- **Adding a label post-creation** uses `marina cluster label <name> -l key=value` (MarinaCLI.labelCluster) — **requires marina 0.1.35+**.
+- **kube-context names == cluster name** (marina merges each cluster into `~/.kube/config` under a context named after the cluster, not `kind-<name>`), so `currentKubeContext == cluster.name` and `use-context <name>` both work directly.
+- **Clusters are grouped by fleet** (`AppModel.clusterGroups`, `ClusterGroup`): fleets first, alphabetically, then clusters with no fleet. The sidebar and the overview both give each fleet a header with a delete button (the sidebar also has a right-click "Delete Fleet…" on member rows), behind the shared `fleetDeletionDialog` confirmation. Deletion shells `marina fleet delete <name> -y` (marina 0.1.37+) rather than looping over names in Swift: marina resolves membership by label inside the guest, so a cluster whose labels the UI failed to fetch is still included. The dialog lists the members the UI knows about and adds a caveat when `hasClustersWithUnknownFleet`. Logged under `LogScope.fleet(name)`, surfaced on the overview (the fleet's header is gone once it succeeds).
 - **The same node fetch also caches the kubelet version** (`AppModel.clusterNodeVersion`). `kubeNodeVersionSummary` reduces it for the About tab: one version when every cluster agrees, `mixed` (with a per-cluster tooltip) when they don't, and the configured `kind.nodeVersion` image tag from `config.yaml` as the fallback when no cluster is up.
 
 The About tab also shows the guest VM's distribution and kernel (`GuestStats.osName` / `.kernel`), read in one SSH round-trip: `uname -r` plus `PRETTY_NAME` from `/etc/os-release`. They come from the full `stats()` call (refreshAll), not the 5 s sample loop, which just carries them forward.
@@ -434,24 +445,24 @@ Selection state lives in `AppModel.selection: SidebarSelection?` and drives both
 kind nodes and registry mirrors already have first-class places in the UI (the Clusters
 and Registry mirrors sections). The Containers section is deliberately *everything else* —
 what a `docker run` in a terminal left behind — so it never duplicates what's above it. It
-is off by default: a stock klimax VM has none, and an empty section is worse than no
+is off by default: a stock marina VM has none, and an empty section is worse than no
 section.
 
 ### Single-VM model
 
-klimax only ever runs one VM. The sidebar dedicates its top section to that one VM (logo, status, CPU/mem stats) and the rest of the workspace below. There is no VM list, no VM switcher — just `if let vm = model.vm` everywhere.
+marina only ever runs one VM. The sidebar dedicates its top section to that one VM (logo, status, CPU/mem stats) and the rest of the workspace below. There is no VM list, no VM switcher — just `if let vm = model.vm` everywhere.
 
-### Why we don't use the klimax CLI for state
+### Why we don't use the marina CLI for state
 
-`klimax cluster list -o json` is the one CLI command we DO use, because parsing kind's cluster discovery ourselves would duplicate klimax's work. For everything else (VM liveness, lima config, ssh config, mirror config) we read the filesystem directly. Reasons:
+`marina cluster list -o json` is the one CLI command we DO use, because parsing kind's cluster discovery ourselves would duplicate marina's work. For everything else (VM liveness, lima config, ssh config, mirror config) we read the filesystem directly. Reasons:
 
-1. CLI invocation costs ~50–150 ms each (fork + Swift→klimax→Go→exit).
+1. CLI invocation costs ~50–150 ms each (fork + Swift→marina→Go→exit).
 2. State files are the source of truth — the CLI just reads them.
 3. UI polling cadences would multiply CLI invocations.
 
-### Re-using klimax's SSH ControlMaster
+### Re-using marina's SSH ControlMaster
 
-When klimax brings the VM up, it opens an OpenSSH ControlMaster socket described by `~/.klimax/<vm>/ssh.config`. By passing `-F <ssh.config>` to our own `ssh` calls, we ride that existing socket — no fresh TCP handshake, no fresh auth, sub-100 ms round-trip for short commands.
+When marina brings the VM up, it opens an OpenSSH ControlMaster socket described by `~/.marina/<vm>/ssh.config`. By passing `-F <ssh.config>` to our own `ssh` calls, we ride that existing socket — no fresh TCP handshake, no fresh auth, sub-100 ms round-trip for short commands.
 
 ### Hardened-runtime re-sign step
 
@@ -459,7 +470,7 @@ swift-bundler v3 does code-sign with the supplied Developer ID identity, but **d
 
 ### App lives outside the App Store
 
-The app shells out to `ssh`, `kubectl`, `helm`, reads arbitrary paths under `~/.klimax/`, opens SSH ControlMaster sockets, and uses `NWConnection` to probe arbitrary LAN IPs. The App Store sandbox would fight every one of those. Homebrew cask via Developer ID is the right call here.
+The app shells out to `ssh`, `kubectl`, `helm`, reads arbitrary paths under `~/.marina/`, opens SSH ControlMaster sockets, and uses `NWConnection` to probe arbitrary LAN IPs. The App Store sandbox would fight every one of those. Homebrew cask via Developer ID is the right call here.
 
 ---
 
@@ -469,7 +480,7 @@ The app shells out to `ssh`, `kubectl`, `helm`, reads arbitrary paths under `~/.
 
 ```bash
 ./build.sh                  # swift-bundler bundle -c release + ad-hoc codesign
-                            # → .build/bundler/apps/KlimaxUI/KlimaxUI.app
+                            # → .build/bundler/apps/MarinaUI/MarinaUI.app
 ```
 
 ### Release (signed + notarized + DMG + ZIP)
@@ -490,22 +501,22 @@ Bump `version` in `Bundler.toml`, then:
 
 ```bash
 ./scripts/release.sh
-# → .build/bundler/apps/KlimaxUI/KlimaxUI.{zip,dmg}
+# → .build/bundler/apps/MarinaUI/MarinaUI.{zip,dmg}
 # → both signed with Developer ID, notarized, stapled, Gatekeeper-verified
 # → prints a ready-to-paste cask block (version + dmg sha256) at the end
 ```
 
 Env overrides:
 
-- `KLIMAX_SIGN_IDENTITY` — the Developer ID Application identity name.
-- `KLIMAX_NOTARY_PROFILE` — the `notarytool` profile name (default `klimax-notary`).
+- `MARINA_SIGN_IDENTITY` — the Developer ID Application identity name.
+- `MARINA_NOTARY_PROFILE` — the `notarytool` profile name (default `klimax-notary`).
 
 ### Publishing checklist
 
-1. `./scripts/release.sh` — verify both artifacts land in `.build/bundler/apps/KlimaxUI/`.
-2. `gh release create vX.Y.Z .build/bundler/apps/KlimaxUI/KlimaxUI.dmg .build/bundler/apps/KlimaxUI/KlimaxUI.zip --title "vX.Y.Z" --notes "..."`.
-3. Paste the printed cask block into `Casks/klimax-ui.rb` in the [`bcollard/homebrew-klimax`](https://github.com/bcollard/homebrew-klimax) tap; commit and push.
-4. End-users update via `brew upgrade --cask klimax-ui`.
+1. `./scripts/release.sh` — verify both artifacts land in `.build/bundler/apps/MarinaUI/`.
+2. `gh release create vX.Y.Z .build/bundler/apps/MarinaUI/MarinaUI.dmg .build/bundler/apps/MarinaUI/MarinaUI.zip --title "vX.Y.Z" --notes "..."`.
+3. Paste the printed cask block into `Casks/marina-ui.rb` in the [`bcollard/homebrew-marina`](https://github.com/bcollard/homebrew-marina) tap; commit and push.
+4. End-users update via `brew upgrade --cask marina-ui`.
 
 ---
 
@@ -530,11 +541,11 @@ The first VM sample after VM start shows no CPU% (we need a delta against a prio
 
 ### LoadBalancer probes assume routability
 
-The probe runs from the macOS host. It assumes the LoadBalancer external IPs are routable from the host — usually true when klimax is set up with MetalL plus a host network bridge. If the user has split networking, the probe will report unreachable even though the IP works from elsewhere.
+The probe runs from the macOS host. It assumes the LoadBalancer external IPs are routable from the host — usually true when marina is set up with MetalL plus a host network bridge. If the user has split networking, the probe will report unreachable even though the IP works from elsewhere.
 
 ### App Store distribution would require sandboxing
 
-The sandbox would block: `ssh` to arbitrary hosts, reading `~/.klimax/` without explicit Files-and-Folders entitlement, `NWConnection` to arbitrary LAN IPs, `kubectl`/`helm` shell-outs. Stick with the cask path.
+The sandbox would block: `ssh` to arbitrary hosts, reading `~/.marina/` without explicit Files-and-Folders entitlement, `NWConnection` to arbitrary LAN IPs, `kubectl`/`helm` shell-outs. Stick with the cask path.
 
 ---
 
@@ -543,5 +554,5 @@ The sandbox would block: `ssh` to arbitrary hosts, reading `~/.klimax/` without 
 - **Logs view.** Tail `kubectl logs -f` for selected pods inside the app.
 - **Resource graphs by namespace.** Top-N pods is useful; per-namespace stacked area would surface heavy tenants.
 - **MetalLB IP allocation map.** Pull `MetalLB`'s `IPAddressPool` CRDs and show which ranges are in use vs free.
-- **VM resize.** Edit `lima.yaml` (cpus/memory/disk) and trigger `klimax restart` from the UI.
+- **VM resize.** Edit `lima.yaml` (cpus/memory/disk) and trigger `marina restart` from the UI.
 - **Mirror prune.** Surface aged tags and offer a "delete tag" action via the registry HTTP API.

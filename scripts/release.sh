@@ -80,7 +80,7 @@ cask "marina-ui" do
   desc "macOS companion app for the marina CLI and the kind clusters it manages"
   homepage "https://github.com/bcollard/marina-ui"
 
-  depends_on macos: ">= :sonoma"
+  depends_on macos: :sonoma
 
   app "MarinaUI.app"
 

@@ -2,18 +2,18 @@
 import PackageDescription
 
 let package = Package(
-    name: "KlimaxUI",
+    name: "MarinaUI",
     platforms: [.macOS(.v14)],
     dependencies: [
         .package(url: "https://github.com/jpsim/Yams.git", from: "5.1.0"),
     ],
     targets: [
         .executableTarget(
-            name: "KlimaxUI",
+            name: "MarinaUI",
             dependencies: [
                 .product(name: "Yams", package: "Yams"),
             ],
-            path: "Sources/KlimaxUI",
+            path: "Sources/MarinaUI",
             resources: [
                 .process("Resources"),
             ]

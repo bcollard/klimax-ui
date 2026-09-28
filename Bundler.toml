@@ -1,15 +1,15 @@
 format_version = 3
 
-[apps.KlimaxUI]
-identifier = "dev.bcollard.KlimaxUI"
-product = "KlimaxUI"
-version = "0.2.7"
+[apps.MarinaUI]
+identifier = "dev.bcollard.MarinaUI"
+product = "MarinaUI"
+version = "0.3.0"
 category = "public.app-category.developer-tools"
-icon = "Sources/KlimaxUI/Resources/klimax-logo.png"
+icon = "Sources/MarinaUI/Resources/marina-logo.png"
 
-[apps.KlimaxUI.plist]
-CFBundleDisplayName = "Klimax"
-CFBundleName = "Klimax"
+[apps.MarinaUI.plist]
+CFBundleDisplayName = "Marina"
+CFBundleName = "Marina"
 NSHumanReadableCopyright = "Copyright © 2026 Baptiste Collard. All rights reserved."
 LSMinimumSystemVersion = "14.0"
 NSHighResolutionCapable = true

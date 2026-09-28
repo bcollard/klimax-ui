@@ -214,20 +214,33 @@ final class AppModel {
     }
 
     /// Names that point at one of this Service's VIPs, in its cluster zone or
-    /// its fleet zone. The automatic name comes first; the rest are hostname
-    /// annotations or Ingress hosts on the same VIP.
+    /// its fleet zone, most deliberate first: the Service's own hostname
+    /// annotation, then other names on the VIP (Ingress hosts), then the
+    /// automatic name — `--combine-fqdn-annotation` keeps publishing it next
+    /// to a custom one, but nobody chose it.
     func dnsNames(for service: KubeService, in clusterName: String) -> [LocalDNSRecord] {
         guard let dnsRecords else { return [] }
         let zones = [dnsZone(for: clusterName), fleetZone(for: clusterName)].compactMap { $0 }
         guard !zones.isEmpty else { return [] }
         let ips = Set(service.externalIPs)
+        let annotated = Set(service.hostnameAnnotation)
         let automatic = automaticName(for: service, in: clusterName)
+        func rank(_ name: String) -> Int {
+            annotated.contains(name) ? 0 : name == automatic ? 2 : 1
+        }
         return dnsRecords
             .filter { rec in ips.contains(rec.ip) && zones.contains { rec.name.hasSuffix("." + $0) } }
             .sorted { a, b in
-                if (a.name == automatic) != (b.name == automatic) { return a.name == automatic }
-                return a.name < b.name
+                let (ra, rb) = (rank(a.name), rank(b.name))
+                return ra != rb ? ra < rb : a.name < b.name
             }
+    }
+
+    /// Where a published name comes from, for the Services tab.
+    func dnsNameSource(_ name: String, for service: KubeService, in clusterName: String) -> DNSNameSource {
+        if service.hostnameAnnotation.contains(name) { return .annotation }
+        if name == automaticName(for: service, in: clusterName) { return .automatic }
+        return .sharedVIP
     }
 
     /// Published names in a cluster's own subzone.

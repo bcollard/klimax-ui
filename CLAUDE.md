@@ -302,11 +302,20 @@ cluster writes into etcd, CoreDNS on the kind network (`x.y.255.53`) serves it, 
   klimax). Fetched on `refreshAll()` and in `loadClusterDetail` — never polled. With a
   cluster selected, `refreshAll` skips its own call because `refreshSelection` does it.
 - **Services tab** matches records to a Service by VIP within the cluster's subzone
-  **or its fleet zone** `<fleet>.<domain>` (klimax 0.2.3; `AppModel.dnsNames(for:in:)`).
-  The automatic name — `network.dns.nameTemplate` rendered for `.Name`/`.Namespace`,
-  default `{{.Name}}.{{.Namespace}}` — sorts first and becomes the link host, with the
-  IP kept as secondary text. A template using `.Labels`/`.Annotations` can't be
-  rendered here, so then no name is singled out. Fleet-zone names get a `fleet` badge.
+  **or its fleet zone** `<fleet>.<domain>` (klimax 0.2.3; `AppModel.dnsNames(for:in:)`),
+  ordered most deliberate first: names from the Service's
+  `external-dns.kubernetes.io/hostname` annotation, then other names on the VIP
+  (`DNSNameSource.sharedVIP`, typically Ingress hosts), then the automatic name
+  (`network.dns.nameTemplate`, default `{{.Name}}.{{.Namespace}}`). klimax runs
+  ExternalDNS with `--combine-fqdn-annotation`, so the automatic name stays published
+  next to a custom one — it is listed last and dimmed, and the first name is the
+  endpoint host. Each name carries an `annotation` / `automatic` / `same VIP` badge;
+  fleet-zone names get a `fleet` badge.
+- **Ports** render as a grid: port, protocol, `appProtocol`, name, targetPort, endpoint.
+  The endpoint is a link only when `PortScheme.infer` finds a scheme — `appProtocol`
+  first (authoritative: a non-HTTP value means no link), then the port name's prefix
+  (`http`, `https-admin`), then 80/8080/443/8443. Anything else is raw TCP and shows
+  `host:port` to copy, never an `http://` URL.
 - **Two dots, two questions.** The DNS row's dot is `getaddrinfo` (`HostResolver`),
   which on macOS goes through mDNSResponder and so honours `/etc/resolver` — the same
   path a browser takes. The TCP row's dot is still the probe against the IP. A red DNS

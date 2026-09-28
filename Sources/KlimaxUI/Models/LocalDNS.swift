@@ -9,6 +9,17 @@ struct LocalDNSRecord: Sendable, Hashable, Decodable, Identifiable {
     var id: String { "\(name)→\(ip)" }
 }
 
+/// Why a name points at a Service's VIP.
+enum DNSNameSource: Sendable, Hashable {
+    /// The Service's `external-dns.kubernetes.io/hostname` annotation.
+    case annotation
+    /// `network.dns.nameTemplate` under the cluster zone.
+    case automatic
+    /// Published by something else on the same VIP — an Ingress host on an
+    /// ingress controller's Service, typically.
+    case sharedVIP
+}
+
 /// Decoded `klimax ca status -o json` (klimax 0.2.2+). Host-side only — it
 /// reads `~/.klimax/pki` — so it answers with the VM stopped.
 struct LocalCAStatus: Sendable, Hashable, Decodable {

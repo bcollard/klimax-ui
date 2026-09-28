@@ -69,6 +69,7 @@ struct ObjectMeta: Decodable, Sendable, Hashable {
     let name: String
     let namespace: String?
     let labels: [String: String]?
+    let annotations: [String: String]?
 }
 
 struct KubeService: Decodable, Sendable, Hashable, Identifiable {
@@ -100,11 +101,14 @@ struct KubeService: Decodable, Sendable, Hashable, Identifiable {
         let name: String?
         let port: Int
         let protocolValue: String
+        /// `spec.ports[].appProtocol`: an IANA name (`http`, `https`) or a
+        /// prefixed one (`kubernetes.io/h2c`, `kubernetes.io/ws`).
+        let appProtocol: String?
         let nodePort: Int?
         let targetPortString: String?
 
         enum CodingKeys: String, CodingKey {
-            case name, port, nodePort
+            case name, port, nodePort, appProtocol
             case protocolValue = "protocol"
             case targetPort
         }
@@ -114,6 +118,7 @@ struct KubeService: Decodable, Sendable, Hashable, Identifiable {
             self.name = try c.decodeIfPresent(String.self, forKey: .name)
             self.port = try c.decode(Int.self, forKey: .port)
             self.protocolValue = try c.decodeIfPresent(String.self, forKey: .protocolValue) ?? "TCP"
+            self.appProtocol = try c.decodeIfPresent(String.self, forKey: .appProtocol)
             self.nodePort = try c.decodeIfPresent(Int.self, forKey: .nodePort)
             // targetPort is either int or string ("http"); normalize to string.
             if let intVal = try? c.decodeIfPresent(Int.self, forKey: .targetPort) {
@@ -131,6 +136,16 @@ struct KubeService: Decodable, Sendable, Hashable, Identifiable {
     }
 
     var isLoadBalancer: Bool { spec.type == "LoadBalancer" }
+
+    /// Names requested with `external-dns.kubernetes.io/hostname` (comma-
+    /// separated). klimax's ExternalDNS reads only this prefix; the old
+    /// `external-dns.alpha.kubernetes.io/` one is ignored, so it is here too.
+    var hostnameAnnotation: [String] {
+        (metadata.annotations?["external-dns.kubernetes.io/hostname"] ?? "")
+            .split(separator: ",")
+            .map { $0.trimmingCharacters(in: .whitespaces).trimmingCharacters(in: CharacterSet(charactersIn: ".")) }
+            .filter { !$0.isEmpty }
+    }
 }
 
 struct ResourceList: Decodable, Sendable, Hashable {

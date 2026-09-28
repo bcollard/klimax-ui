@@ -38,7 +38,7 @@ struct ServicesTabView: View {
     }
 
     /// nil when the zone is off or klimax predates it — the card then renders
-    /// exactly as before, IP links only.
+    /// with IP endpoints only.
     private func dnsContext(for svc: KubeService) -> ServiceDNS? {
         guard let zone = model.dnsZone(for: cluster.name) else { return nil }
         let names = model.dnsNames(for: svc, in: cluster.name)
@@ -46,6 +46,9 @@ struct ServicesTabView: View {
             zone: zone,
             server: model.localDNS?.server,
             names: names,
+            sources: Dictionary(uniqueKeysWithValues: names.map {
+                ($0.name, model.dnsNameSource($0.name, for: svc, in: cluster.name))
+            }),
             fleetNames: Set(names.map(\.name).filter { model.isFleetName($0, in: cluster.name) }),
             coverage: Dictionary(uniqueKeysWithValues: names.compactMap { rec in
                 model.wildcardCoverage(for: rec.name, in: cluster.name).map { (rec.name, $0) }
@@ -78,8 +81,9 @@ struct ServicesTabView: View {
 private struct ServiceDNS {
     let zone: String
     let server: String?
-    /// Automatic name first, then annotation / Ingress names on the same VIP.
+    /// Annotated names first, then other names on the VIP, automatic last.
     let names: [LocalDNSRecord]
+    let sources: [String: DNSNameSource]
     /// Names under the fleet zone rather than the cluster's.
     let fleetNames: Set<String>
     /// Names a klimax wildcard covers.
@@ -89,8 +93,10 @@ private struct ServiceDNS {
     let resolutions: [String: NameResolution]
     let externalDNS: ExternalDNSState?
 
-    /// The name links use: the automatic one when published.
-    var primaryName: String? { names.first?.name }
+    /// The name endpoints use for a VIP: the most deliberate one on it.
+    func host(for ip: String) -> String? {
+        names.first { $0.ip == ip }?.name
+    }
 }
 
 private struct ServiceCard: View {
@@ -106,71 +112,68 @@ private struct ServiceCard: View {
     var body: some View {
         GroupBox {
             VStack(alignment: .leading, spacing: 10) {
-                HStack(alignment: .firstTextBaseline) {
-                    VStack(alignment: .leading, spacing: 2) {
-                        HStack(spacing: 8) {
-                            Text(service.metadata.name).font(.headline)
-                            Text(service.metadata.namespace ?? "")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(Capsule().fill(Color.secondary.opacity(0.12)))
-                        }
-                        if ips.isEmpty {
-                            Text("Pending external IP…")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                        if !unroutedIPs.isEmpty {
-                            Label("\(unroutedIPs.joined(separator: ", ")) is outside the kind bridge CIDR — the Mac has no route to it",
-                                  systemImage: "exclamationmark.triangle.fill")
-                                .font(.caption)
-                                .foregroundStyle(.orange)
-                        }
-                    }
-                    Spacer()
+                titleRow
+
+                if ips.isEmpty {
+                    Text("Pending external IP…")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
+                }
+                if !unroutedIPs.isEmpty {
+                    Label("\(unroutedIPs.joined(separator: ", ")) is outside the kind bridge CIDR — the Mac has no route to it",
+                          systemImage: "exclamationmark.triangle.fill")
+                        .font(.caption)
+                        .foregroundStyle(.orange)
                 }
 
                 if let dns, !ips.isEmpty {
-                    Divider()
-                    dnsNamesBlock(dns)
+                    namesBlock(dns)
                 }
 
-                if !ips.isEmpty, !ports.isEmpty {
+                if !ports.isEmpty {
                     Divider()
-                    VStack(alignment: .leading, spacing: 6) {
-                        ForEach(ips, id: \.self) { ip in
-                            ForEach(ports) { port in
-                                EndpointRow(
-                                    ip: ip,
-                                    host: dns?.names.first { $0.ip == ip }?.name,
-                                    port: port,
-                                    probe: probes["\(ip):\(port.port)"]
-                                )
-                            }
-                        }
-                    }
+                    portsGrid
                 }
             }
             .padding(8)
             .frame(maxWidth: .infinity, alignment: .leading)
         }
     }
-}
 
-extension ServiceCard {
+    private var titleRow: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Text(service.metadata.name).font(.headline)
+            Text(service.metadata.namespace ?? "")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 6)
+                .padding(.vertical, 2)
+                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+            Spacer()
+            ForEach(ips, id: \.self) { ip in
+                Text(verbatim: ip)
+                    .font(.callout.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+                    .help("LoadBalancer VIP")
+            }
+        }
+    }
+
     @ViewBuilder
-    fileprivate func dnsNamesBlock(_ dns: ServiceDNS) -> some View {
+    private func namesBlock(_ dns: ServiceDNS) -> some View {
         if dns.names.isEmpty {
             Label(emptyNamesText(dns), systemImage: "questionmark.circle")
                 .font(.caption)
                 .foregroundStyle(.secondary)
         } else {
             VStack(alignment: .leading, spacing: 4) {
-                ForEach(dns.names) { rec in
+                ForEach(Array(dns.names.enumerated()), id: \.element.id) { index, rec in
                     DNSNameRow(
                         record: rec,
+                        source: dns.sources[rec.name] ?? .sharedVIP,
+                        isPrimary: index == 0,
+                        showIP: ips.count > 1,
                         resolution: dns.resolutions[rec.name],
                         server: dns.server,
                         isFleet: dns.fleetNames.contains(rec.name),
@@ -192,11 +195,54 @@ extension ServiceCard {
             return "No DNS name yet. ExternalDNS publishes new Services within ~15 s — press ⌘R to re-check."
         }
     }
+
+    /// One row per port (per VIP when there are several). The endpoint column
+    /// links only when the port says it speaks HTTP(S) — a raw TCP port gets
+    /// `host:port` to copy, not a URL a browser can't use.
+    private var portsGrid: some View {
+        Grid(alignment: .leading, horizontalSpacing: 16, verticalSpacing: 6) {
+            GridRow {
+                Color.clear.frame(width: 8, height: 1)
+                columnHeader("Port")
+                columnHeader("Protocol")
+                columnHeader("App protocol")
+                columnHeader("Name")
+                columnHeader("Target")
+                columnHeader("Endpoint")
+                Color.clear.frame(width: 1, height: 1)
+            }
+            ForEach(endpointIPs, id: \.self) { ip in
+                ForEach(ports) { port in
+                    PortRow(
+                        port: port,
+                        ip: ip,
+                        host: dns?.host(for: ip),
+                        probe: ip.isEmpty ? nil : probes["\(ip):\(port.port)"]
+                    )
+                }
+            }
+        }
+    }
+
+    /// Ports are worth describing before MetalLB assigns a VIP; "" stands for
+    /// "no address yet".
+    private var endpointIPs: [String] { ips.isEmpty ? [""] : ips }
+
+    private func columnHeader(_ title: String) -> some View {
+        Text(title)
+            .font(.caption)
+            .foregroundStyle(.tertiary)
+    }
 }
 
 /// One published name, with whether macOS resolves it to the VIP.
 private struct DNSNameRow: View {
     let record: LocalDNSRecord
+    let source: DNSNameSource
+    /// The name the port endpoints use.
+    let isPrimary: Bool
+    /// Only worth repeating when the Service has several VIPs.
+    let showIP: Bool
     let resolution: NameResolution?
     let server: String?
     let isFleet: Bool
@@ -211,18 +257,24 @@ private struct DNSNameRow: View {
     var body: some View {
         HStack(alignment: .center, spacing: 10) {
             resolutionDot.frame(width: 12)
-            Text("DNS")
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-                .frame(width: 36, alignment: .leading)
             Text(verbatim: record.name)
-                .font(.system(.callout, design: .monospaced))
+                .font(.system(.callout, design: .monospaced).weight(isPrimary ? .semibold : .regular))
+                .foregroundStyle(isPrimary ? .primary : .secondary)
                 .textSelection(.enabled)
                 .lineLimit(1)
                 .truncationMode(.middle)
-            Text(verbatim: "→ \(record.ip)")
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.tertiary)
+            if showIP {
+                Text(verbatim: "→ \(record.ip)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            Text(sourceLabel)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .padding(.horizontal, 5)
+                .padding(.vertical, 1)
+                .background(Capsule().fill(Color.secondary.opacity(0.12)))
+                .help(sourceHelp)
             if isFleet {
                 Text("fleet")
                     .font(.caption2.weight(.semibold))
@@ -247,6 +299,25 @@ private struct DNSNameRow: View {
             copyButton(record.name, systemImage: "doc.on.doc", help: "Copy \(record.name)")
             copyButton(digCommand, systemImage: "terminal",
                        help: "Copy `\(digCommand)`. dig skips /etc/resolver, so a bare `dig \(record.name)` fails even when browsers and curl resolve it; use `dscacheutil -q host -a name \(record.name)` to test the Mac's own path.")
+        }
+    }
+
+    private var sourceLabel: String {
+        switch source {
+        case .annotation: return "annotation"
+        case .automatic: return "automatic"
+        case .sharedVIP: return "same VIP"
+        }
+    }
+
+    private var sourceHelp: String {
+        switch source {
+        case .annotation:
+            return "From the Service's external-dns.kubernetes.io/hostname annotation."
+        case .automatic:
+            return "The name klimax gives every LoadBalancer Service (network.dns.nameTemplate). Still published when the Service sets its own hostname."
+        case .sharedVIP:
+            return "Published by another object on the same VIP — typically an Ingress host served by this controller."
         }
     }
 
@@ -294,72 +365,102 @@ private struct DNSNameRow: View {
     }
 }
 
-private struct EndpointRow: View {
-    let ip: String
-    /// Published DNS name for this VIP, used for the link when present.
-    let host: String?
+/// One Service port as a grid row: what the port is, then where to reach it.
+private struct PortRow: View {
     let port: KubeService.Port
+    /// "" before MetalLB assigns a VIP.
+    let ip: String
+    /// Published DNS name for this VIP, used in the endpoint when present.
+    let host: String?
     let probe: AppModel.ProbeResult?
+    @State private var copied = false
 
     private var isTCP: Bool { port.protocolValue.uppercased() == "TCP" }
-    private var endpoint: String { "\(host ?? ip):\(port.port)" }
+    private var address: String { host ?? ip }
+    private var endpoint: String { "\(address):\(port.port)" }
+    private var scheme: PortScheme? { PortScheme.infer(port) }
 
     private var url: URL? {
-        let scheme = scheme(for: port)
-        let portSuffix = (scheme == "http" && port.port == 80) || (scheme == "https" && port.port == 443)
-            ? ""
-            : ":\(port.port)"
-        return URL(string: "\(scheme)://\(host ?? ip)\(portSuffix)")
+        guard let scheme, !ip.isEmpty else { return nil }
+        let defaultPort = (scheme.name == "http" && port.port == 80) || (scheme.name == "https" && port.port == 443)
+        return URL(string: "\(scheme.name)://\(address)\(defaultPort ? "" : ":\(port.port)")")
     }
 
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
+        GridRow(alignment: .center) {
             probeDot
-                .frame(width: 12)
+            Text(verbatim: String(port.port))
+                .font(.system(.callout, design: .monospaced).weight(.medium))
             Text(port.protocolValue.uppercased())
-                .font(.caption2.monospaced())
-                .foregroundStyle(.tertiary)
-                .frame(width: 36, alignment: .leading)
-            if let url, isTCP {
-                Link(url.absoluteString, destination: url)
-                    .font(.system(.callout, design: .monospaced))
-            } else {
-                Text(verbatim: endpoint)
-                    .font(.system(.callout, design: .monospaced))
-                    .textSelection(.enabled)
-            }
-            if host != nil {
-                Text(verbatim: ip)
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-                    .textSelection(.enabled)
-            }
-            if let name = port.name {
-                Text(name)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
-            if let target = port.targetPortString {
-                Text(verbatim: "→ \(target)")
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
-            Spacer()
+                .font(.callout.monospaced())
+                .foregroundStyle(.secondary)
+            optional(port.appProtocol)
+            optional(port.name)
+            optional(port.targetPortString.flatMap { $0 == String(port.port) ? nil : $0 })
+                .help("targetPort — the container port traffic is forwarded to")
+            endpointCell
+                .gridColumnAlignment(.leading)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            copyButton
+        }
+    }
+
+    @ViewBuilder
+    private var endpointCell: some View {
+        if ip.isEmpty {
+            Text("—").foregroundStyle(.tertiary)
+        } else if let url, let scheme {
+            Link(url.absoluteString, destination: url)
+                .font(.system(.callout, design: .monospaced))
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help("\(scheme.name.uppercased()) — \(scheme.reason)")
+        } else {
+            Text(verbatim: endpoint)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .lineLimit(1)
+                .truncationMode(.middle)
+                .help(isTCP
+                      ? "Raw TCP: nothing on the port says it speaks HTTP. Set appProtocol: http or https (or name the port http-… / https-…) to get a link."
+                      : "\(port.protocolValue) port")
+        }
+    }
+
+    private func optional(_ value: String?) -> some View {
+        Text(verbatim: value ?? "—")
+            .font(.callout.monospaced())
+            .foregroundStyle(value == nil ? .tertiary : .secondary)
+            .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var copyButton: some View {
+        if ip.isEmpty {
+            Color.clear.frame(width: 1, height: 1)
+        } else {
+            let text = url?.absoluteString ?? endpoint
             Button {
-                let pb = NSPasteboard.general
-                pb.clearContents()
-                pb.setString(endpoint, forType: .string)
+                NSPasteboard.general.clearContents()
+                NSPasteboard.general.setString(text, forType: .string)
+                copied = true
+                Task {
+                    try? await Task.sleep(for: .seconds(2))
+                    copied = false
+                }
             } label: {
-                Image(systemName: "doc.on.doc")
+                Image(systemName: copied ? "checkmark" : "doc.on.doc")
             }
             .buttonStyle(.borderless)
-            .help("Copy \(endpoint)")
+            .help("Copy \(text)")
         }
     }
 
     @ViewBuilder
     private var probeDot: some View {
-        if !isTCP {
+        if ip.isEmpty {
+            Color.clear.frame(width: 8, height: 8)
+        } else if !isTCP {
             Image(systemName: "minus.circle")
                 .foregroundStyle(.tertiary)
                 .font(.caption)
@@ -379,8 +480,8 @@ private struct EndpointRow: View {
     private func probeTooltip(_ p: AppModel.ProbeResult) -> String {
         let ago = Self.relativeFormatter.localizedString(for: p.timestamp, relativeTo: Date())
         return p.isOpen
-            ? "TCP \(ip):\(port.port) — reachable (\(ago))"
-            : "TCP \(ip):\(port.port) — unreachable (\(ago))"
+            ? "TCP connect to \(ip):\(port.port) succeeded (\(ago))"
+            : "TCP connect to \(ip):\(port.port) failed (\(ago))"
     }
 
     private static let relativeFormatter: RelativeDateTimeFormatter = {
@@ -388,11 +489,46 @@ private struct EndpointRow: View {
         f.unitsStyle = .abbreviated
         return f
     }()
+}
 
-    private func scheme(for port: KubeService.Port) -> String {
+/// The URL scheme a Service port speaks, when something on the port says so.
+/// Order of trust: `appProtocol` (explicit, so a non-HTTP value means no
+/// link), then the port name's protocol prefix (`http`, `https-admin` — the
+/// Istio convention), then the well-known port numbers.
+struct PortScheme: Equatable {
+    let name: String
+    let reason: String
+
+    static func infer(_ port: KubeService.Port) -> PortScheme? {
+        guard port.protocolValue.uppercased() == "TCP" else { return nil }
+        if let app = port.appProtocol?.lowercased() {
+            switch app {
+            case "http", "http2", "h2c", "kubernetes.io/h2c":
+                return PortScheme(name: "http", reason: "from appProtocol \(app)")
+            case "https":
+                return PortScheme(name: "https", reason: "from appProtocol \(app)")
+            default:
+                return nil
+            }
+        }
+        if let name = port.name?.lowercased() {
+            let prefix = name.split(separator: "-").first.map(String.init) ?? name
+            switch prefix {
+            case "http", "http2", "h2c":
+                return PortScheme(name: "http", reason: "from the port name \(name)")
+            case "https":
+                return PortScheme(name: "https", reason: "from the port name \(name)")
+            default:
+                break
+            }
+        }
         switch port.port {
-        case 443, 8443: return "https"
-        default: return "http"
+        case 80, 8080:
+            return PortScheme(name: "http", reason: "guessed from port \(port.port)")
+        case 443, 8443:
+            return PortScheme(name: "https", reason: "guessed from port \(port.port)")
+        default:
+            return nil
         }
     }
 }
